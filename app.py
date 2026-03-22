@@ -880,56 +880,67 @@ class AutoBuyerApp(ctk.CTk):
             self._log(f"스케줄 {idx+1} 삭제")
 
     def _start_all(self):
-        """모든 대기 스케줄 시작"""
+        """모든 대기 스케줄을 시간순으로 순차 실행 (하나의 Chrome 공유)"""
         pending = [s for s in self.schedules if s["status"] == "대기"]
         if not pending:
             self._log("시작할 스케줄이 없습니다. '스케줄 추가'를 먼저 하세요.")
             return
-        if not messagebox.askyesno("전체 시작", f"{len(pending)}개 스케줄 시작.\n실제 주문이 이루어집니다.", icon="warning"):
+        if not messagebox.askyesno("전체 시작", f"{len(pending)}개 스케줄 순차 실행.\n실제 주문이 이루어집니다.", icon="warning"):
             return
-        pre_nav = int(self.pre_nav_entry.get().strip() or "30")
-        profile = self.profile_entry.get().strip()
-        for i, sched in enumerate(pending):
-            scheduler = PurchaseScheduler(log_callback=self._log)
-            scheduler.on_countdown = self._update_countdown
-            scheduler.on_complete = lambda s=sched: self._on_schedule_complete(s)
-            if i == 0 and self.scheduler.browser.driver is not None:
-                scheduler.browser = self.scheduler.browser
-            scheduler.configure(
-                product_url=sched["url"], purchase_time=sched["purchase_dt"],
-                options=sched["options"], quantity=sched["quantity"],
-                use_ntp=self.ntp_var.get(), chrome_profile=profile,
-                pre_navigate_seconds=pre_nav, retry_enabled=sched["retry_enabled"],
-                retry_preset="custom", retry_interval=sched["retry_interval"],
-                retry_max=sched["retry_max"],
-            )
-            sched["scheduler"] = scheduler
-            sched["status"] = "실행 중"
-            scheduler.start()
+
+        # 시간순 정렬
+        pending.sort(key=lambda s: s["purchase_dt"])
+
         self.start_all_btn.configure(state="disabled")
         self.stop_all_btn.configure(state="normal")
-        self.status_label.configure(text=f"{len(pending)}개 실행 중", fg_color=T["primary"])
-        self._render_schedules()
-        self._log(f"전체 시작: {len(pending)}개 스케줄")
+        self.status_label.configure(text=f"0/{len(pending)} 완료", fg_color=T["primary"])
+        self._stop_all_event = threading.Event()
+        self._log(f"전체 시작: {len(pending)}개 스케줄 (시간순 순차 실행)")
 
-    def _stop_all(self):
-        for s in self.schedules:
-            if s["scheduler"] and s["scheduler"].is_running:
-                s["scheduler"].stop()
-                s["status"] = "대기"
-        self.start_all_btn.configure(state="normal")
-        self.stop_all_btn.configure(state="disabled")
-        self.status_label.configure(text="중지됨", fg_color=T["danger"])
-        self.countdown_label.configure(text="00:00:00.000", text_color=T["countdown_normal"])
-        self.progress_bar.set(0)
-        self._render_schedules()
-        self._log("전체 중지")
+        def _run_sequential():
+            pre_nav = int(self.pre_nav_entry.get().strip() or "30")
+            profile = self.profile_entry.get().strip()
+            scheduler = PurchaseScheduler(log_callback=self._log)
+            scheduler.on_countdown = self._update_countdown
 
-    def _on_schedule_complete(self, sched: dict):
-        sched["status"] = "완료"
-        self.after(0, self._render_schedules)
-        running = [s for s in self.schedules if s["status"] == "실행 중"]
-        if not running:
+            # 기존 Chrome 세션 재사용
+            if self.scheduler.browser.driver is not None:
+                scheduler.browser = self.scheduler.browser
+
+            completed = 0
+            for sched in pending:
+                if self._stop_all_event.is_set():
+                    break
+
+                self.after(0, lambda s=sched: self._update_schedule_status(s, "실행 중"))
+
+                scheduler.configure(
+                    product_url=sched["url"], purchase_time=sched["purchase_dt"],
+                    options=sched["options"], quantity=sched["quantity"],
+                    use_ntp=self.ntp_var.get(), chrome_profile=profile,
+                    pre_navigate_seconds=pre_nav, retry_enabled=sched["retry_enabled"],
+                    retry_preset="custom", retry_interval=sched["retry_interval"],
+                    retry_max=sched["retry_max"],
+                )
+
+                # 동기 실행 (스레드 안에서 직접 호출)
+                try:
+                    success = scheduler._execute()
+                except InterruptedError:
+                    self.after(0, lambda s=sched: self._update_schedule_status(s, "대기"))
+                    break
+                except Exception as e:
+                    self._log(f"스케줄 오류: {e}")
+                    success = False
+
+                status = "완료" if success else "실패"
+                self.after(0, lambda s=sched, st=status: self._update_schedule_status(s, st))
+                completed += 1
+                self.after(0, lambda c=completed, t=len(pending): self.status_label.configure(
+                    text=f"{c}/{t} 완료"
+                ))
+
+            # 전체 완료
             def _done():
                 self.start_all_btn.configure(state="normal")
                 self.stop_all_btn.configure(state="disabled")
@@ -941,6 +952,29 @@ class AutoBuyerApp(ctk.CTk):
                 except Exception:
                     pass
             self.after(0, _done)
+
+        threading.Thread(target=_run_sequential, daemon=True).start()
+        self._render_schedules()
+
+    def _update_schedule_status(self, sched: dict, status: str):
+        """스케줄 상태 업데이트 (메인 스레드에서 호출)"""
+        sched["status"] = status
+        self._render_schedules()
+
+    def _stop_all(self):
+        if hasattr(self, "_stop_all_event"):
+            self._stop_all_event.set()
+        # 현재 실행 중인 스케줄러도 중지
+        for s in self.schedules:
+            if s.get("scheduler") and s["scheduler"].is_running:
+                s["scheduler"].stop()
+        self.start_all_btn.configure(state="normal")
+        self.stop_all_btn.configure(state="disabled")
+        self.status_label.configure(text="중지됨", fg_color=T["danger"])
+        self.countdown_label.configure(text="00:00:00.000", text_color=T["countdown_normal"])
+        self.progress_bar.set(0)
+        self._render_schedules()
+        self._log("전체 중지")
 
     def _on_retry_update(self, current: int, max_retries: int, status: str):
         def _update():
@@ -999,7 +1033,10 @@ class AutoBuyerApp(ctk.CTk):
         else:
             self.countdown_label.configure(text_color=T["countdown_normal"])
 
-        if hasattr(self, "_total_wait") and self._total_wait > 0:
+        # 최초 콜백 시 total_wait 설정
+        if not hasattr(self, "_total_wait") or self._total_wait <= 0:
+            self._total_wait = remaining
+        if self._total_wait > 0:
             self.progress_bar.set(max(0, min(1, 1 - remaining / self._total_wait)))
 
     def _log(self, message: str):

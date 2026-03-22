@@ -914,28 +914,29 @@ class BrowserManager:
             return False
 
     def click_buy_button(self) -> bool:
-        """구매하기 버튼 클릭 (M1 수정: 스레드 안전)"""
+        """구매하기 버튼 클릭"""
         with self._purchase_lock:
             if self._purchase_completed:
                 self.log("이중 구매 방지: 이미 구매 완료")
                 return False
 
-        buy_selectors = [
-            (By.CSS_SELECTOR, "a[class*='_buyButton'], button[class*='_buyButton']"),
-            (By.CSS_SELECTOR, "a[class*='buy'], button[class*='buy']"),
-            (By.XPATH, "//a[contains(text(),'구매하기')]"),
-            (By.XPATH, "//button[contains(text(),'구매하기')]"),
-            (By.XPATH, "//a[contains(text(),'바로구매')]"),
-            (By.XPATH, "//*[@id='content']//fieldset//div[9]/div[1]/div/a"),
-        ]
-        for by, selector in buy_selectors:
-            try:
-                elem = self.driver.find_element(by, selector)
-                elem.click()
-                self.log("구매 버튼 클릭!")
-                return True
-            except NoSuchElementException:
-                continue
+            buy_selectors = [
+                (By.CSS_SELECTOR, "a[class*='_buyButton'], button[class*='_buyButton']"),
+                (By.CSS_SELECTOR, "a[class*='buy'], button[class*='buy']"),
+                (By.XPATH, "//a[contains(text(),'구매하기')]"),
+                (By.XPATH, "//button[contains(text(),'구매하기')]"),
+                (By.XPATH, "//a[contains(text(),'바로구매')]"),
+                (By.XPATH, "//*[@id='content']//fieldset//div[9]/div[1]/div/a"),
+            ]
+            for by, selector in buy_selectors:
+                try:
+                    elem = self.driver.find_element(by, selector)
+                    elem.click()
+                    self._purchase_completed = True  # 즉시 플래그
+                    self.log("구매 버튼 클릭!")
+                    return True
+                except NoSuchElementException:
+                    continue
 
         self.log("구매 버튼을 찾을 수 없습니다.")
         return False

@@ -95,8 +95,9 @@ class PurchaseScheduler:
         self.log("스케줄러 중지됨")
 
     def _run(self):
+        success = False
         try:
-            self._execute()
+            success = self._execute()
         except InterruptedError:
             self.log("사용자에 의해 중지됨")
         except Exception as e:
@@ -104,9 +105,8 @@ class PurchaseScheduler:
             import traceback
             self.log(traceback.format_exc())
         finally:
-            # M3 수정: 리소스 정리 (Chrome 프로세스는 유지 — 사용자가 확인할 수 있도록)
             if self.on_complete:
-                self.on_complete()
+                self.on_complete(success)
 
     def _check_running(self):
         if self._stop_event.is_set():
@@ -117,7 +117,8 @@ class PurchaseScheduler:
         if self.on_countdown:
             self.on_countdown(remaining)
 
-    def _execute(self):
+    def _execute(self) -> bool:
+        """실행. 성공 시 True, 실패 시 False 반환."""
         # ── 1. NTP 동기화 ──
         if self.use_ntp:
             try:
@@ -137,7 +138,7 @@ class PurchaseScheduler:
         # ── 3. 로그인 확인 ──
         if not self.browser.ensure_logged_in():
             self.log("로그인 실패 — 브라우저에서 수동 로그인 후 다시 시도하세요")
-            return
+            return False
 
         # ── 4. 사전 네비게이션 대기 ──
         now = self.ntp.now() if self.use_ntp else datetime.now()
@@ -160,7 +161,7 @@ class PurchaseScheduler:
             self.log("로그인 리다이렉트 감지 — 재로그인...")
             if not self.browser.login():
                 self.log("재로그인 실패")
-                return
+                return False
             self.browser.navigate(self.product_url)
             _time.sleep(1)
 
@@ -176,48 +177,39 @@ class PurchaseScheduler:
         self.log("=" * 40)
 
         if self.retry_enabled:
-            self._execute_with_retry()
+            return self._execute_with_retry()
         else:
-            self._execute_single_attempt()
+            return self._execute_single_attempt()
 
-    def _execute_single_attempt(self):
-        """단일 구매 시도"""
+    def _execute_single_attempt(self) -> bool:
         self.browser.driver.refresh()
         _time.sleep(0.5)
-        self._do_purchase()
+        return self._do_purchase()
 
-    def _execute_with_retry(self):
-        """재시도 루프 — 품절/미오픈 시 반복"""
+    def _execute_with_retry(self) -> bool:
+        """재시도 루프"""
         for attempt in range(1, self.retry_max + 1):
             self._check_running()
-
             if self.on_retry_update:
                 self.on_retry_update(attempt, self.retry_max, "재시도 중")
-
-            self.log(f"[시도 {attempt}/{self.retry_max}] 페이지 새로고침...")
+            self.log(f"[시도 {attempt}/{self.retry_max}] 새로고침...")
             self.browser.driver.refresh()
             _time.sleep(0.5)
-
-            # 구매 가능 여부 확인
             if self.browser.is_product_available():
-                self.log(f"[시도 {attempt}] 상품 구매 가능! 구매 진행...")
+                self.log(f"[시도 {attempt}] 구매 가능!")
                 if self._do_purchase():
                     if self.on_retry_update:
                         self.on_retry_update(attempt, self.retry_max, "성공")
-                    return
-                else:
-                    self.log(f"[시도 {attempt}] 구매 버튼 클릭 실패, 재시도...")
+                    return True
+                self.log(f"[시도 {attempt}] 구매 실패, 재시도...")
             else:
-                self.log(f"[시도 {attempt}] 품절/미오픈 상태")
-
-            # 다음 시도까지 대기 (지터 추가)
+                self.log(f"[시도 {attempt}] 품절/미오픈")
             jitter = random.uniform(-self.retry_jitter, self.retry_jitter)
-            wait = max(0.1, self.retry_interval + jitter)
-            _time.sleep(wait)
-
-        self.log(f"최대 재시도 횟수({self.retry_max})를 초과했습니다.")
+            _time.sleep(max(0.1, self.retry_interval + jitter))
+        self.log(f"최대 재시도({self.retry_max})회 초과")
         if self.on_retry_update:
             self.on_retry_update(self.retry_max, self.retry_max, "실패")
+        return False
 
     def _do_purchase(self) -> bool:
         """실제 구매 프로세스: 옵션 → 수량 → 구매 → 결제"""

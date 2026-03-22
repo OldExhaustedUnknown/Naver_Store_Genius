@@ -74,6 +74,8 @@ class NTPSync:
                 time.sleep(0.5)
             elif remaining > 0.1:
                 time.sleep(0.01)
+            else:
+                time.sleep(0.001)  # busy-wait에서도 최소 1ms sleep (CPU 보호)
 
     @property
     def is_synced(self) -> bool:
