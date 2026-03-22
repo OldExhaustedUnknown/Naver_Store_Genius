@@ -57,6 +57,21 @@ def delete_credentials() -> None:
         pass
 
 
+def save_pay_password(pw: str) -> None:
+    keyring.set_password(KEYRING_SERVICE, "naverpay_pw", pw)
+
+
+def load_pay_password() -> Optional[str]:
+    return keyring.get_password(KEYRING_SERVICE, "naverpay_pw")
+
+
+def delete_pay_password() -> None:
+    try:
+        keyring.delete_password(KEYRING_SERVICE, "naverpay_pw")
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
 def save_api_key(api_key: str) -> None:
     keyring.set_password(KEYRING_SERVICE, "anthropic_api_key", api_key)
 
@@ -924,18 +939,17 @@ class BrowserManager:
         return False
 
     def process_payment(self) -> bool:
-        """주문/결제 페이지에서 '결제하기' 버튼 클릭"""
+        """주문/결제 페이지 → 결제하기 클릭 → 네이버페이 비밀번호 자동 입력"""
         try:
-            # 주문/결제 페이지 로드 대기
             time.sleep(2)
             self.log("주문/결제 페이지 대기...")
 
-            # "결제하기" 버튼 찾기
+            # 1. "결제하기" 버튼 클릭
+            pay_clicked = False
             pay_selectors = [
                 (By.XPATH, "//button[contains(text(),'결제하기')]"),
                 (By.XPATH, "//a[contains(text(),'결제하기')]"),
                 (By.CSS_SELECTOR, "button[class*='payment'], button[class*='pay']"),
-                (By.CSS_SELECTOR, "a[class*='payment'], a[class*='pay']"),
             ]
             for by, selector in pay_selectors:
                 try:
@@ -944,15 +958,145 @@ class BrowserManager:
                     )
                     elem.click()
                     self.log("결제하기 버튼 클릭!")
-                    return True
+                    pay_clicked = True
+                    break
                 except (NoSuchElementException, TimeoutException):
                     continue
 
-            self.log("결제 버튼 미발견 — 수동 결제 필요")
-            return False
+            if not pay_clicked:
+                self.log("결제 버튼 미발견 — 수동 결제 필요")
+                return False
+
+            # 2. 네이버페이 비밀번호 키패드 처리
+            time.sleep(2)
+            if self._handle_pay_keypad():
+                self.log("결제 완료!")
+                return True
+            else:
+                self.log("비밀번호 입력 실패 — 수동 입력 필요")
+                return False
 
         except Exception as e:
             self.log(f"결제 처리 오류: {e}")
+            return False
+
+    def _handle_pay_keypad(self) -> bool:
+        """네이버페이 가상 키패드에서 비밀번호 자동 입력
+
+        키패드 숫자 위치가 매번 랜덤 → 스크린샷으로 위치 파악 → 순서대로 클릭
+        """
+        pay_pw = load_pay_password()
+        if not pay_pw:
+            self.log("네이버페이 비밀번호가 저장되지 않았습니다.")
+            return False
+
+        api_key = load_api_key()
+        if not api_key:
+            self.log("Claude API 키가 없어 키패드를 풀 수 없습니다.")
+            return False
+
+        try:
+            import base64
+            import json as _json
+            import anthropic
+
+            # 비밀번호 팝업 대기 (새 창 또는 iframe)
+            time.sleep(1)
+
+            # 팝업 창으로 전환
+            original_window = self.driver.current_window_handle
+            windows = self.driver.window_handles
+            keypad_window = None
+            for w in windows:
+                if w != original_window:
+                    keypad_window = w
+                    break
+
+            if keypad_window:
+                self.driver.switch_to.window(keypad_window)
+                self.log("비밀번호 팝업 창 전환")
+                time.sleep(0.5)
+
+            # 키패드 스크린샷
+            keypad_img = self.driver.get_screenshot_as_png()
+            img_b64 = base64.b64encode(keypad_img).decode("utf-8")
+
+            # Claude에 키패드 숫자 좌표 요청
+            client = anthropic.Anthropic(api_key=api_key)
+            message = client.messages.create(
+                model="claude-opus-4-20250514",
+                max_tokens=300,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "이 이미지는 네이버페이 비밀번호 가상 키패드입니다.\n"
+                                "각 숫자(0~9)의 화면상 중심 좌표(x, y)를 JSON으로 알려주세요.\n"
+                                "이미지의 왼쪽 상단이 (0,0)이고 픽셀 단위입니다.\n"
+                                "형식: {\"0\": [x, y], \"1\": [x, y], ...}\n"
+                                "JSON만 출력하세요. 다른 텍스트 없이."
+                            ),
+                        },
+                    ],
+                }],
+            )
+
+            response_text = message.content[0].text.strip()
+            # JSON 추출 (코드블록 안에 있을 수 있음)
+            if "```" in response_text:
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.strip()
+
+            keypad_map = _json.loads(response_text)
+            self.log(f"키패드 좌표 {len(keypad_map)}개 인식")
+
+            # 비밀번호 한 자리씩 클릭
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            for digit in pay_pw:
+                if digit not in keypad_map:
+                    self.log(f"키패드에서 '{digit}' 좌표를 찾을 수 없음")
+                    return False
+
+                x, y = keypad_map[digit]
+                # 절대 좌표로 클릭 (JavaScript)
+                self.driver.execute_script(
+                    "document.elementFromPoint(arguments[0], arguments[1]).click();",
+                    int(x), int(y)
+                )
+                time.sleep(0.2)
+                self.log(f"키패드 '{digit}' 클릭 ({x}, {y})")
+
+            time.sleep(1)
+
+            # 원래 창으로 복귀
+            if keypad_window:
+                try:
+                    self.driver.switch_to.window(original_window)
+                except Exception:
+                    pass
+
+            return True
+
+        except Exception as e:
+            self.log(f"키패드 입력 오류: {e}")
+            # 원래 창으로 복귀 시도
+            try:
+                self.driver.switch_to.window(self.driver.window_handles[0])
+            except Exception:
+                pass
             return False
 
     def reset_purchase_flag(self):

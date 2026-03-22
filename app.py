@@ -19,6 +19,7 @@ from datetime_picker import CalendarPopup, TimeSpinbox
 from browser import (
     save_credentials, load_credentials, delete_credentials,
     save_api_key, load_api_key, delete_api_key,
+    save_pay_password, load_pay_password, delete_pay_password,
     validate_smartstore_url, BrowserManager,
 )
 
@@ -250,6 +251,18 @@ class AutoBuyerApp(ctk.CTk):
             height=28,
         )
         self.login_badge.pack(anchor="w", padx=18, pady=(0, 6))
+
+        # 네이버페이 비밀번호
+        pay_row = ctk.CTkFrame(login_card, fg_color="transparent")
+        pay_row.pack(fill="x", padx=18, pady=3)
+        self._label(pay_row, "페이 비번", width=70).pack(side="left")
+        self.pay_pw_entry = self._entry(pay_row, placeholder="6자리 숫자", show="*", width=100)
+        self.pay_pw_entry.pack(side="left", padx=(4, 6))
+        self._btn_secondary(pay_row, "저장", self._save_pay_pw, width=50).pack(side="left")
+        self.pay_status = ctk.CTkLabel(
+            pay_row, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+        )
+        self.pay_status.pack(side="left", padx=6)
 
         # API 키 (캡챠 자동 풀이용)
         ctk.CTkLabel(
@@ -628,6 +641,17 @@ class AutoBuyerApp(ctk.CTk):
         self.cred_status.configure(text="삭제 완료", text_color=T["warning"])
         self._log("자격증명이 삭제되었습니다.")
 
+    def _save_pay_pw(self):
+        pw = self.pay_pw_entry.get().strip()
+        if not pw or not pw.isdigit() or len(pw) != 6:
+            self.pay_status.configure(text="6자리 숫자", text_color=T["danger"])
+            return
+        save_pay_password(pw)
+        self.pay_pw_entry.delete(0, "end")
+        self.pay_pw_entry.insert(0, "******")
+        self.pay_status.configure(text="저장됨", text_color=T["primary"])
+        self._log("네이버페이 비밀번호 저장 완료")
+
     def _save_api_key(self):
         key = self.api_key_entry.get().strip()
         if not key:
@@ -838,6 +862,11 @@ class AutoBuyerApp(ctk.CTk):
         if nid:
             self.naver_id_entry.insert(0, nid)
             self.cred_status.configure(text="자격증명 저장됨 (확인 필요)", text_color=T["text_tertiary"])
+        # 페이 비번 상태
+        pay_pw = load_pay_password()
+        if pay_pw:
+            self.pay_pw_entry.insert(0, "******")
+            self.pay_status.configure(text="저장됨", text_color=T["primary"])
         # API 키 상태
         api_key = load_api_key()
         if api_key:
