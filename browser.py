@@ -485,13 +485,20 @@ class BrowserManager:
             import re
             import anthropic
 
+            # 스크린샷 전 윈도우 크기 확보 (해상도 보장)
+            try:
+                self.driver.set_window_size(1920, 1080)
+                time.sleep(0.3)
+            except Exception:
+                pass
+
             captcha_img = self.driver.get_screenshot_as_png()
             # 디버그: 스크린샷 파일로 저장
             import tempfile
             debug_path = os.path.join(tempfile.gettempdir(), "captcha_debug.png")
             with open(debug_path, "wb") as f:
                 f.write(captcha_img)
-            self.log(f"캡챠 스크린샷 저장: {debug_path} ({len(captcha_img)} bytes)")
+            self.log(f"캡챠 스크린샷: {debug_path} ({len(captcha_img)} bytes)")
             if not captcha_img:
                 return False
 
