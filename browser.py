@@ -513,6 +513,109 @@ class BrowserManager:
     def navigate(self, url: str) -> None:
         self.driver.get(url)
         self.log(f"페이지 이동: {url[:60]}...")
+        time.sleep(1)
+        # 페이지 접근 시 캡챠 감지 → 자동 풀이
+        if self._detect_captcha():
+            self.log("페이지 접근 캡챠 감지 — AI 풀이 시도...")
+            for attempt in range(3):
+                if self._solve_page_captcha():
+                    time.sleep(2)
+                    if not self._detect_captcha():
+                        self.log("캡챠 통과!")
+                        break
+                    self.log(f"캡챠 재시도 {attempt + 2}/3...")
+                else:
+                    break
+
+    def _solve_page_captcha(self) -> bool:
+        """페이지 접근 캡챠 풀이 (로그인 캡챠와 다른 구조)"""
+        api_key = load_api_key()
+        if not api_key:
+            self.log("Claude API 키가 없어 캡챠를 풀 수 없습니다.")
+            return False
+
+        try:
+            import base64
+            import anthropic
+
+            # 캡챠 영역 스크린샷
+            captcha_img = self._capture_captcha_image()
+            if not captcha_img:
+                return False
+
+            client = anthropic.Anthropic(api_key=api_key)
+            img_b64 = base64.b64encode(captcha_img).decode("utf-8")
+
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=100,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "네이버 보안 확인 캡챠입니다. "
+                                "이미지를 분석하고 질문에 대한 정답만 답해주세요. "
+                                "숫자, 텍스트 등 정답만 출력하세요. 다른 설명 없이."
+                            ),
+                        },
+                    ],
+                }],
+            )
+
+            answer = message.content[0].text.strip()
+            self.log(f"캡챠 답: {answer}")
+
+            # 답 입력 필드 찾기
+            input_selectors = [
+                "input[placeholder*='정답']",
+                "input[placeholder*='입력']",
+                "input#captcha",
+                "input[name='captcha']",
+                "input[type='text']:not([type='hidden'])",
+            ]
+            for selector in input_selectors:
+                try:
+                    inp = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if inp.is_displayed():
+                        inp.clear()
+                        inp.send_keys(answer)
+                        time.sleep(0.3)
+
+                        # 확인 버튼 클릭
+                        confirm_selectors = [
+                            "button[class*='confirm']",
+                            "button[type='submit']",
+                            "//button[contains(text(),'확인')]",
+                        ]
+                        for cs in confirm_selectors:
+                            try:
+                                if cs.startswith("//"):
+                                    btn = self.driver.find_element(By.XPATH, cs)
+                                else:
+                                    btn = self.driver.find_element(By.CSS_SELECTOR, cs)
+                                btn.click()
+                                self.log("캡챠 답 제출 완료")
+                                return True
+                            except NoSuchElementException:
+                                continue
+                        break
+                except NoSuchElementException:
+                    continue
+
+            return False
+        except Exception as e:
+            self.log(f"페이지 캡챠 풀이 오류: {e}")
+            return False
 
     def wait_and_click(self, by: str, value: str, timeout: int = 10) -> bool:
         try:

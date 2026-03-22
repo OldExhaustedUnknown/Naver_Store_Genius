@@ -14,6 +14,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from scheduler import PurchaseScheduler, RETRY_PRESETS
+from datetime_picker import CalendarPopup, TimeSpinbox
 from browser import (
     save_credentials, load_credentials, delete_credentials,
     save_api_key, load_api_key, delete_api_key,
@@ -286,19 +287,22 @@ class AutoBuyerApp(ctk.CTk):
         self.url_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
         self._btn_secondary(url_row, "미리보기", self._preview_product, width=80).pack(side="left")
 
+        # 날짜
+        date_row = ctk.CTkFrame(prod_card, fg_color="transparent")
+        date_row.pack(fill="x", padx=18, pady=3)
+        self._label(date_row, "구매 날짜").pack(side="left")
+
+        self.date_entry = self._entry(date_row, placeholder="2026-03-25", width=120)
+        self.date_entry.pack(side="left", padx=(4, 4))
+        self._btn_secondary(date_row, "달력", self._open_calendar, width=50).pack(side="left")
+
+        # 시간
         time_row = ctk.CTkFrame(prod_card, fg_color="transparent")
         time_row.pack(fill="x", padx=18, pady=3)
-        self._label(time_row, "구매 일시").pack(side="left")
+        self._label(time_row, "구매 시간").pack(side="left")
 
-        self.date_entry = self._entry(time_row, placeholder="2026-03-25", width=120)
-        self.date_entry.pack(side="left", padx=(4, 4))
-
-        for lbl_text, attr_name in [("시", "hour_entry"), ("분", "min_entry"), ("초", "sec_entry")]:
-            e = self._entry(time_row, placeholder=lbl_text[:2].upper(), width=48)
-            e.pack(side="left", padx=2)
-            setattr(self, attr_name, e)
-            if lbl_text != "초":
-                ctk.CTkLabel(time_row, text=":", text_color=T["text_tertiary"]).pack(side="left")
+        self.time_spinbox = TimeSpinbox(time_row, font_family=FONT_FAMILY)
+        self.time_spinbox.pack(side="left", padx=(4, 0))
 
         qty_row = ctk.CTkFrame(prod_card, fg_color="transparent")
         qty_row.pack(fill="x", padx=18, pady=(3, 12))
@@ -555,6 +559,19 @@ class AutoBuyerApp(ctk.CTk):
         self.api_status.configure(text="삭제됨", text_color=T["warning"])
         self._log("API 키가 삭제되었습니다.")
 
+    def _open_calendar(self):
+        """달력 팝업 열기"""
+        def on_select(date_str):
+            self.date_entry.delete(0, "end")
+            self.date_entry.insert(0, date_str)
+
+        try:
+            current = datetime.strptime(self.date_entry.get().strip(), "%Y-%m-%d")
+        except (ValueError, AttributeError):
+            current = datetime.now()
+
+        CalendarPopup(self, on_select, current_date=current)
+
     def _preview_product(self):
         """상품 URL을 Chrome에서 미리 열어 옵션/상태 확인"""
         url = self.url_entry.get().strip()
@@ -627,9 +644,7 @@ class AutoBuyerApp(ctk.CTk):
 
         try:
             date_str = self.date_entry.get().strip()
-            h = int(self.hour_entry.get().strip() or "0")
-            m = int(self.min_entry.get().strip() or "0")
-            s = int(self.sec_entry.get().strip() or "0")
+            h, m, s = self.time_spinbox.get_values()
             purchase_dt = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=h, minute=m, second=s)
         except (ValueError, AttributeError):
             self._log("구매 일시 형식 오류 (YYYY-MM-DD)")
@@ -809,9 +824,9 @@ class AutoBuyerApp(ctk.CTk):
         config = {
             "product_url": self.url_entry.get().strip(),
             "purchase_date": self.date_entry.get().strip(),
-            "purchase_hour": self.hour_entry.get().strip(),
-            "purchase_min": self.min_entry.get().strip(),
-            "purchase_sec": self.sec_entry.get().strip(),
+            "purchase_hour": str(self.time_spinbox.get_values()[0]),
+            "purchase_min": str(self.time_spinbox.get_values()[1]),
+            "purchase_sec": str(self.time_spinbox.get_values()[2]),
             "option1": self.option_entries[0].get().strip(),
             "option2": self.option_entries[1].get().strip(),
             "option3": self.option_entries[2].get().strip(),
@@ -844,9 +859,14 @@ class AutoBuyerApp(ctk.CTk):
 
         _set(self.url_entry, "product_url")
         _set(self.date_entry, "purchase_date")
-        _set(self.hour_entry, "purchase_hour")
-        _set(self.min_entry, "purchase_min")
-        _set(self.sec_entry, "purchase_sec")
+        # 시간 스핀박스 로드
+        try:
+            h = int(config.get("purchase_hour", 0) or 0)
+            m = int(config.get("purchase_min", 0) or 0)
+            s = int(config.get("purchase_sec", 0) or 0)
+            self.time_spinbox.set_values(h, m, s)
+        except (ValueError, TypeError):
+            pass
         _set(self.option_entries[0], "option1")
         _set(self.option_entries[1], "option2")
         _set(self.option_entries[2], "option3")
