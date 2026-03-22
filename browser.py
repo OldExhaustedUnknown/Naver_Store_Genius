@@ -80,10 +80,11 @@ class BrowserManager:
     def __init__(self, log_callback=None):
         self.driver: Optional[webdriver.Chrome] = None
         self.log = log_callback or print
-        self._purchase_lock = threading.Lock()  # M1 수정: 스레드 안전
+        self._purchase_lock = threading.Lock()
         self._purchase_completed = False
-        self._chrome_process: Optional[subprocess.Popen] = None  # M4 수정: 프로세스 추적
+        self._chrome_process: Optional[subprocess.Popen] = None
         self._debugger_port: int = 0
+        self._chromedriver_path: str = ""  # 생성 시 1회 resolve
 
     def _find_chrome(self) -> str:
         for path in CHROME_PATHS:
@@ -114,7 +115,6 @@ class BrowserManager:
             chrome_path,
             f"--remote-debugging-port={self._debugger_port}",
             f"--user-data-dir={user_data}",
-            "--disable-blink-features=AutomationControlled",
             "--no-first-run",
             "--no-default-browser-check",
         ]
@@ -188,8 +188,12 @@ class BrowserManager:
             "debuggerAddress", f"127.0.0.1:{self._debugger_port}"
         )
 
-        # chromedriver 경로 직접 지정 (Selenium Manager 지연 방지)
-        chromedriver_path = self._resolve_chromedriver()
+        # chromedriver 경로: 최초 1회만 resolve, 이후 캐싱
+        if not self._chromedriver_path:
+            self._chromedriver_path = self._resolve_chromedriver()
+            if self._chromedriver_path:
+                self.log(f"chromedriver: {os.path.basename(self._chromedriver_path)}")
+        chromedriver_path = self._chromedriver_path
 
         last_error = None
         for attempt in range(1, 4):
