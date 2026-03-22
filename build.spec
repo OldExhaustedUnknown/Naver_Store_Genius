@@ -9,7 +9,9 @@ ctk_path = os.path.dirname(customtkinter.__file__)
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('chromedriver.exe', '.'),
+    ],
     datas=[
         (ctk_path, 'customtkinter/'),
         ('app_icon.ico', '.'),

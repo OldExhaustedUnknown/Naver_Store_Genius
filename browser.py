@@ -147,25 +147,34 @@ class BrowserManager:
         self.log("경고: Chrome 포트 대기 타임아웃 — 연결을 시도합니다")
 
     def _resolve_chromedriver(self) -> str:
-        """chromedriver 경로를 미리 확보 (Selenium Manager 지연 방지)"""
+        """chromedriver 경로 확보 — 앱 번들 > 캐시 > Selenium Manager 순"""
         import glob
+        import sys
 
-        # 1. 캐시에서 직접 찾기
+        # 1. 앱과 같은 디렉토리에 번들된 chromedriver
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        # PyInstaller EXE인 경우 _MEIPASS 경로도 체크
+        if hasattr(sys, "_MEIPASS"):
+            bundled = os.path.join(sys._MEIPASS, "chromedriver.exe")
+            if os.path.exists(bundled):
+                return bundled
+        bundled = os.path.join(app_dir, "chromedriver.exe")
+        if os.path.exists(bundled):
+            return bundled
+
+        # 2. Selenium 캐시
         cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "selenium", "chromedriver")
         candidates = glob.glob(os.path.join(cache_dir, "**", "chromedriver.exe"), recursive=True)
         if candidates:
-            # 가장 최신 버전 사용
             candidates.sort(reverse=True)
             return candidates[0]
 
-        # 2. Selenium Manager 실행하여 다운로드
+        # 3. Selenium Manager로 다운로드 (최초 1회)
         self.log("chromedriver 다운로드 중 (최초 1회)...")
-        import subprocess as _sp
-        import sys
         for p in sys.path:
             se = os.path.join(p, "selenium", "webdriver", "common", "windows", "selenium-manager.exe")
             if os.path.exists(se):
-                result = _sp.run(
+                result = subprocess.run(
                     [se, "--browser", "chrome", "--output", "json"],
                     capture_output=True, text=True, timeout=120,
                 )
@@ -177,7 +186,7 @@ class BrowserManager:
                         return driver_path
                 break
 
-        return ""  # fallback: Selenium이 자동 관리
+        return ""
 
     def connect(self) -> webdriver.Chrome:
         """실행 중인 Chrome에 연결"""
