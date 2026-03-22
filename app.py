@@ -16,6 +16,7 @@ import customtkinter as ctk
 from scheduler import PurchaseScheduler, RETRY_PRESETS
 from browser import (
     save_credentials, load_credentials, delete_credentials,
+    save_api_key, load_api_key, delete_api_key,
     validate_smartstore_url, BrowserManager,
 )
 
@@ -247,7 +248,30 @@ class AutoBuyerApp(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
             height=28,
         )
-        self.login_badge.pack(anchor="w", padx=18, pady=(0, 12))
+        self.login_badge.pack(anchor="w", padx=18, pady=(0, 6))
+
+        # API 키 (캡챠 자동 풀이용)
+        ctk.CTkLabel(
+            login_card, text="캡챠 자동 풀이 (Claude API)",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=T["text_secondary"],
+        ).pack(anchor="w", padx=18, pady=(4, 2))
+
+        api_row = ctk.CTkFrame(login_card, fg_color="transparent")
+        api_row.pack(fill="x", padx=18, pady=(0, 4))
+        self._label(api_row, "API Key", width=70).pack(side="left")
+        self.api_key_entry = self._entry(api_row, placeholder="sk-ant-...", show="*")
+        self.api_key_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        api_btn_row = ctk.CTkFrame(login_card, fg_color="transparent")
+        api_btn_row.pack(fill="x", padx=18, pady=(0, 12))
+        self._btn_secondary(api_btn_row, "API 키 저장", self._save_api_key, width=110).pack(side="left")
+        self._btn_secondary(api_btn_row, "삭제", self._delete_api_key, width=60).pack(side="left", padx=(6, 0))
+        self.api_status = ctk.CTkLabel(
+            api_btn_row, text="",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+        )
+        self.api_status.pack(side="left", padx=10)
 
         # ── 상품 정보 카드 ──
         prod_card = self._card(main)
@@ -513,11 +537,33 @@ class AutoBuyerApp(ctk.CTk):
         self.cred_status.configure(text="삭제 완료", text_color=T["warning"])
         self._log("자격증명이 삭제되었습니다.")
 
+    def _save_api_key(self):
+        key = self.api_key_entry.get().strip()
+        if not key:
+            self.api_status.configure(text="API 키를 입력하세요", text_color=T["danger"])
+            return
+        save_api_key(key)
+        self.api_key_entry.delete(0, "end")
+        self.api_key_entry.insert(0, "*" * 20)
+        self.api_status.configure(text="저장 완료", text_color=T["primary"])
+        self._log("Claude API 키가 저장되었습니다. (캡챠 자동 풀이 활성화)")
+
+    def _delete_api_key(self):
+        delete_api_key()
+        self.api_key_entry.delete(0, "end")
+        self.api_status.configure(text="삭제됨", text_color=T["warning"])
+        self._log("API 키가 삭제되었습니다.")
+
     def _load_saved_credentials(self):
         nid, _ = load_credentials()
         if nid:
             self.naver_id_entry.insert(0, nid)
             self.cred_status.configure(text="자격증명 저장됨 (확인 필요)", text_color=T["text_tertiary"])
+        # API 키 상태
+        api_key = load_api_key()
+        if api_key:
+            self.api_key_entry.insert(0, "*" * 20)
+            self.api_status.configure(text="API 키 저장됨", text_color=T["primary"])
 
     # ══════════════════════════════════════════════
     #  재시도 프리셋

@@ -57,6 +57,21 @@ def delete_credentials() -> None:
         pass
 
 
+def save_api_key(api_key: str) -> None:
+    keyring.set_password(KEYRING_SERVICE, "anthropic_api_key", api_key)
+
+
+def load_api_key() -> Optional[str]:
+    return keyring.get_password(KEYRING_SERVICE, "anthropic_api_key")
+
+
+def delete_api_key() -> None:
+    try:
+        keyring.delete_password(KEYRING_SERVICE, "anthropic_api_key")
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
 def _find_free_port() -> int:
     """사용 가능한 랜덤 포트 반환 (C3 수정: 고정 포트 제거)"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -238,33 +253,231 @@ class BrowserManager:
             return False
 
     def login(self, naver_id: str = "", naver_pw: str = "") -> bool:
-        """네이버 로그인 — 로그인 페이지를 열고 사용자가 직접 로그인하도록 유도.
+        """네이버 자동 로그인 — ID/PW 입력 + 캡챠 자동 풀이(Claude API)
 
-        자동 입력은 네이버 캡챠를 유발하므로, 사용자 직접 로그인 + 완료 감지 방식.
+        플로우:
+        1. 로그인 페이지 이동
+        2. ID/PW 클립보드 붙여넣기
+        3. 로그인 버튼 클릭
+        4. 캡챠 감지 시 → 스크린샷 → Claude API → 답 입력 → 재시도
+        5. 로그인 완료 감지
         """
+        if not naver_id or not naver_pw:
+            naver_id, naver_pw = load_credentials()
+        if not naver_id or not naver_pw:
+            self.log("로그인 자격증명이 없습니다.")
+            return False
+
         try:
             self.driver.get(
                 "https://nid.naver.com/nidlogin.login?mode=form&url=https%3A%2F%2Fwww.naver.com"
             )
-            time.sleep(1)
-            self.log("네이버 로그인 페이지를 열었습니다. 직접 로그인해주세요.")
+            time.sleep(1.5)
 
-            # 로그인 완료 대기 (최대 120초)
-            for i in range(120):
-                time.sleep(1)
-                try:
-                    current_url = self.driver.current_url
-                    if "nidlogin" not in current_url and "login" not in current_url.split("?")[0]:
-                        self.log("로그인 완료 감지!")
-                        return True
-                except WebDriverException:
-                    pass
-            self.log("로그인 타임아웃 (120초)")
+            # ID/PW 입력 (클립보드 붙여넣기)
+            self._input_credentials(naver_id, naver_pw)
+
+            # 로그인 버튼 클릭
+            login_btn = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']")
+                )
+            )
+            login_btn.click()
+            time.sleep(2)
+
+            # 로그인 결과 확인 (최대 3회 캡챠 시도)
+            for attempt in range(3):
+                current_url = self.driver.current_url
+                if "nidlogin" not in current_url and "login" not in current_url.split("?")[0]:
+                    self.log("네이버 로그인 성공!")
+                    return True
+
+                # 캡챠 감지
+                if self._detect_captcha():
+                    self.log(f"캡챠 감지 — AI로 풀이 시도 ({attempt + 1}/3)...")
+                    if self._solve_captcha():
+                        # 캡챠 풀이 후 로그인 버튼 재클릭
+                        time.sleep(1)
+                        try:
+                            btn = self.driver.find_element(
+                                By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']"
+                            )
+                            btn.click()
+                        except NoSuchElementException:
+                            pass
+                        time.sleep(2)
+                        continue
+                    else:
+                        self.log("캡챠 풀이 실패")
+                else:
+                    # 캡챠 없이 로그인 실패 — 추가 인증 또는 수동 대기
+                    self.log("브라우저에서 직접 로그인을 완료해주세요 (120초 대기)")
+                    for _ in range(120):
+                        time.sleep(1)
+                        try:
+                            url = self.driver.current_url
+                            if "nidlogin" not in url and "login" not in url.split("?")[0]:
+                                self.log("로그인 완료 감지!")
+                                return True
+                        except WebDriverException:
+                            pass
+                    break
+
+            # 최종 확인
+            current_url = self.driver.current_url
+            if "nidlogin" not in current_url and "login" not in current_url.split("?")[0]:
+                self.log("로그인 성공!")
+                return True
+
+            self.log("로그인 실패 — ID/PW를 확인하세요.")
             return False
 
         except Exception as e:
-            self.log(f"로그인 실패: {e}")
+            self.log(f"로그인 오류: {e}")
             return False
+
+    def _input_credentials(self, naver_id: str, naver_pw: str) -> None:
+        """ID/PW를 클립보드 붙여넣기로 입력"""
+        import pyperclip
+        from selenium.webdriver.common.keys import Keys
+
+        id_el = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "input#id, input[name='id']"))
+        )
+        id_el.click()
+        time.sleep(0.2)
+        pyperclip.copy(naver_id)
+        id_el.send_keys(Keys.CONTROL, "a")
+        id_el.send_keys(Keys.CONTROL, "v")
+        time.sleep(0.3)
+
+        pw_el = self.driver.find_element(By.CSS_SELECTOR, "input#pw, input[name='pw']")
+        pw_el.click()
+        time.sleep(0.2)
+        pyperclip.copy(naver_pw)
+        pw_el.send_keys(Keys.CONTROL, "a")
+        pw_el.send_keys(Keys.CONTROL, "v")
+        time.sleep(0.3)
+
+        pyperclip.copy("")  # 클립보드 정리
+
+    def _detect_captcha(self) -> bool:
+        """캡챠 존재 여부 감지"""
+        try:
+            page = self.driver.page_source
+            captcha_keywords = ["자동입력 방지", "captcha", "ncaptcha", "정답을 입력"]
+            return any(kw in page for kw in captcha_keywords)
+        except Exception:
+            return False
+
+    def _solve_captcha(self) -> bool:
+        """캡챠 이미지를 캡처하여 Claude API로 풀이 후 답 입력"""
+        api_key = load_api_key()
+        if not api_key:
+            self.log("Claude API 키가 없습니다. GUI에서 설정해주세요.")
+            return False
+
+        try:
+            import base64
+            import anthropic
+
+            # 1. 캡챠 이미지 캡처
+            captcha_img = self._capture_captcha_image()
+            if not captcha_img:
+                self.log("캡챠 이미지를 찾을 수 없습니다.")
+                return False
+
+            # 2. Claude API로 풀이
+            self.log("Claude API로 캡챠 분석 중...")
+            client = anthropic.Anthropic(api_key=api_key)
+
+            img_b64 = base64.b64encode(captcha_img).decode("utf-8")
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=100,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "이것은 네이버 로그인 캡챠 이미지입니다. "
+                                "질문에 대한 정답을 숫자만 답해주세요. "
+                                "예: 영수증에서 총 몇 종류인지 묻는다면 숫자만 답해주세요. "
+                                "정답만 출력하세요. 다른 설명 없이 숫자나 텍스트 답만."
+                            ),
+                        },
+                    ],
+                }],
+            )
+
+            answer = message.content[0].text.strip()
+            self.log(f"캡챠 답: {answer}")
+
+            # 3. 답 입력
+            answer_input = self.driver.find_element(
+                By.CSS_SELECTOR,
+                "input#captcha, input[name='captcha'], input[placeholder*='정답'], input[placeholder*='입력']"
+            )
+            answer_input.clear()
+            answer_input.send_keys(answer)
+            time.sleep(0.3)
+
+            self.log("캡챠 답 입력 완료")
+            return True
+
+        except Exception as e:
+            self.log(f"캡챠 풀이 오류: {e}")
+            return False
+
+    def _capture_captcha_image(self) -> Optional[bytes]:
+        """캡챠 이미지 영역을 스크린샷으로 캡처"""
+        try:
+            # 캡챠 이미지 요소 찾기
+            captcha_selectors = [
+                "img#captchaimg",
+                "img[id*='captcha']",
+                "img[src*='captcha']",
+                "div.captcha_wrap img",
+                "div[class*='captcha'] img",
+                "#captcha img",
+            ]
+            for selector in captcha_selectors:
+                try:
+                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    return elem.screenshot_as_png
+                except NoSuchElementException:
+                    continue
+
+            # 캡챠 영역 전체 스크린샷 (이미지를 못 찾으면)
+            captcha_area_selectors = [
+                "div.captcha_wrap",
+                "div[class*='captcha']",
+                "#captcha",
+            ]
+            for selector in captcha_area_selectors:
+                try:
+                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    return elem.screenshot_as_png
+                except NoSuchElementException:
+                    continue
+
+            # 최후의 수단: 전체 페이지 스크린샷
+            self.log("캡챠 요소 미발견 — 전체 페이지 캡처")
+            return self.driver.get_screenshot_as_png()
+
+        except Exception as e:
+            self.log(f"캡챠 캡처 오류: {e}")
+            return None
 
     def ensure_logged_in(self) -> bool:
         """로그인 상태 확인 후 필요시 자동 로그인"""
