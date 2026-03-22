@@ -1,0 +1,17 @@
+{
+    "product_url": "",
+    "purchase_date": "",
+    "purchase_hour": "",
+    "purchase_min": "",
+    "purchase_sec": "",
+    "option1": "",
+    "option2": "",
+    "option3": "",
+    "quantity": "1",
+    "use_ntp_sync": true,
+    "pre_navigate_seconds": "30",
+    "chrome_profile_path": "",
+    "retry_enabled": true,
+    "retry_interval": "1.0",
+    "retry_max": "60"
+}
