@@ -238,65 +238,28 @@ class BrowserManager:
             return False
 
     def login(self, naver_id: str = "", naver_pw: str = "") -> bool:
-        """네이버 로그인 수행"""
-        if not naver_id or not naver_pw:
-            naver_id, naver_pw = load_credentials()
-        if not naver_id or not naver_pw:
-            self.log("로그인 자격증명이 없습니다. GUI에서 설정해주세요.")
-            return False
+        """네이버 로그인 — 로그인 페이지를 열고 사용자가 직접 로그인하도록 유도.
 
+        자동 입력은 네이버 캡챠를 유발하므로, 사용자 직접 로그인 + 완료 감지 방식.
+        """
         try:
             self.driver.get(
                 "https://nid.naver.com/nidlogin.login?mode=form&url=https%3A%2F%2Fwww.naver.com"
             )
-            time.sleep(1.5)
+            time.sleep(1)
+            self.log("네이버 로그인 페이지를 열었습니다. 직접 로그인해주세요.")
 
-            # 클립보드 붙여넣기 방식 — 캡챠 회피에 효과적
-            import pyperclip
-            from selenium.webdriver.common.keys import Keys
-
-            # 아이디 입력
-            id_el = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "input#id, input[name='id']"))
-            )
-            id_el.click()
-            time.sleep(0.2)
-            pyperclip.copy(naver_id)
-            id_el.send_keys(Keys.CONTROL, "a")
-            id_el.send_keys(Keys.CONTROL, "v")
-            time.sleep(0.3)
-
-            # 비밀번호 입력
-            pw_el = self.driver.find_element(By.CSS_SELECTOR, "input#pw, input[name='pw']")
-            pw_el.click()
-            time.sleep(0.2)
-            pyperclip.copy(naver_pw)
-            pw_el.send_keys(Keys.CONTROL, "a")
-            pw_el.send_keys(Keys.CONTROL, "v")
-            time.sleep(0.3)
-
-            # 클립보드 정리 (보안)
-            pyperclip.copy("")
-
-            # 로그인 버튼 클릭
-            login_btn = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']"))
-            )
-            login_btn.click()
-            time.sleep(2)
-
-            current_url = self.driver.current_url
-            if "nidlogin" not in current_url:
-                self.log("네이버 로그인 성공")
-                return True
-
-            self.log("로그인 추가 인증 필요 — 브라우저에서 직접 완료해주세요 (60초 대기)")
-            for _ in range(60):
+            # 로그인 완료 대기 (최대 120초)
+            for i in range(120):
                 time.sleep(1)
-                if "nidlogin" not in self.driver.current_url:
-                    self.log("수동 인증 완료, 로그인 성공")
-                    return True
-            self.log("로그인 타임아웃 (60초)")
+                try:
+                    current_url = self.driver.current_url
+                    if "nidlogin" not in current_url and "login" not in current_url.split("?")[0]:
+                        self.log("로그인 완료 감지!")
+                        return True
+                except WebDriverException:
+                    pass
+            self.log("로그인 타임아웃 (120초)")
             return False
 
         except Exception as e:
