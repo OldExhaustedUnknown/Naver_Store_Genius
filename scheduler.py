@@ -126,10 +126,13 @@ class PurchaseScheduler:
             except ConnectionError as e:
                 self.log(f"NTP 실패, 로컬 시간 사용: {e}")
 
-        # ── 2. Chrome 연결 ──
-        self.log("Chrome 연결 시도...")
-        self.browser.launch_chrome(self.chrome_profile)
-        self.browser.connect()
+        # ── 2. Chrome 연결 (이미 연결되어 있으면 재사용) ──
+        if self.browser.driver is not None:
+            self.log("기존 Chrome 세션 재사용")
+        else:
+            self.log("Chrome 연결 시도...")
+            self.browser.launch_chrome(self.chrome_profile)
+            self.browser.connect()
 
         # ── 3. 로그인 확인 ──
         if not self.browser.ensure_logged_in():

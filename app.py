@@ -426,7 +426,7 @@ class AutoBuyerApp(ctk.CTk):
     # ══════════════════════════════════════════════
 
     def _save_and_verify(self):
-        """자격증명 저장 → 실제 로그인 확인 → 성공 시 Chrome 최소화"""
+        """자격증명 저장 → 실제 Chrome으로 네이버 로그인 확인 → 성공 시 최소화"""
         nid = self.naver_id_entry.get().strip()
         npw = self.naver_pw_entry.get().strip()
         if not nid or not npw:
@@ -436,31 +436,46 @@ class AutoBuyerApp(ctk.CTk):
         # 저장
         save_credentials(nid, npw)
         self.naver_pw_entry.delete(0, "end")
-        self.cred_status.configure(text="저장 완료, 로그인 확인 중...", text_color=T["info"])
-        self._log("자격증명 저장됨. 로그인 확인을 시작합니다...")
+        self.cred_status.configure(text="저장 완료, Chrome 실행 중...", text_color=T["info"])
+        self._log("자격증명 저장 완료. Chrome을 열어 로그인을 확인합니다...")
 
-        # 별도 스레드에서 로그인 확인
+        # 스케줄러의 browser 인스턴스를 재사용 (나중에 예약 시에도 같은 Chrome 사용)
+        profile = self.profile_entry.get().strip()
+
         def verify():
-            browser = BrowserManager(log_callback=self._log)
+            browser = self.scheduler.browser
             try:
-                browser.launch_chrome(self.profile_entry.get().strip())
-                browser.connect()
+                # 1. Chrome 실행
+                self._log("[1/4] Chrome 실행 중...")
+                browser.launch_chrome(profile)
 
+                # 2. Selenium 연결
+                self._log("[2/4] Chrome 연결 중...")
+                browser.connect()
+                self._log("[2/4] Chrome 연결 성공")
+
+                # 3. 네이버 로그인 페이지로 이동
+                self._log("[3/4] 네이버 로그인 상태 확인 중...")
                 if browser.is_logged_in():
-                    self._log("이미 로그인 상태입니다.")
+                    self._log("[4/4] 이미 로그인되어 있습니다!")
                     self.after(0, lambda: self._set_login_badge(True))
                     browser.minimize_window()
                     return
 
+                # 4. 로그인 시도
+                self._log("[3/4] 로그인 필요 — 네이버 로그인 페이지로 이동합니다...")
+                self._log("[4/4] 로그인 시도 중...")
                 if browser.login(nid, npw):
-                    self._log("로그인 확인 성공!")
+                    self._log("로그인 확인 성공! Chrome을 최소화합니다.")
                     self.after(0, lambda: self._set_login_badge(True))
                     browser.minimize_window()
                 else:
-                    self._log("로그인 실패. ID/PW를 확인해주세요.")
+                    self._log("로그인 실패. ID/PW를 확인하거나 브라우저에서 직접 로그인하세요.")
                     self.after(0, lambda: self._set_login_badge(False))
             except Exception as e:
                 self._log(f"로그인 확인 오류: {e}")
+                import traceback
+                self._log(traceback.format_exc())
                 self.after(0, lambda: self._set_login_badge(False))
 
         threading.Thread(target=verify, daemon=True).start()

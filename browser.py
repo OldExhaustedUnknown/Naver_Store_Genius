@@ -32,7 +32,7 @@ CHROME_PATHS = [
 ]
 
 CHROME_TEMP_DIR = os.path.join(
-    os.environ.get("LOCALAPPDATA", r"C:\Users\Public"), "chrometemp_autobuyer"
+    os.environ.get("LOCALAPPDATA", r"C:\Users\Public"), "NaverStoreGenius_chrome"
 )
 
 
@@ -92,42 +92,133 @@ class BrowserManager:
         raise FileNotFoundError("Chrome 실행 파일을 찾을 수 없습니다.")
 
     def launch_chrome(self, profile_path: str = "") -> None:
-        """디버거 포트가 열린 Chrome 인스턴스 실행 (C1 수정: list-based Popen)"""
+        """디버거 포트가 열린 Chrome 인스턴스 실행
+
+        Chrome은 같은 user-data-dir로 2개 실행 불가 → 기존 인스턴스 감지 후 처리
+        """
         chrome_path = self._find_chrome()
         user_data = profile_path or CHROME_TEMP_DIR
         self._debugger_port = _find_free_port()
 
-        # C1 수정: shell=True → list 기반, 인젝션 불가
-        cmd = [
-            chrome_path,
-            f"--remote-debugging-port={self._debugger_port}",
-            f"--user-data-dir={user_data}",
-        ]
-        self._chrome_process = subprocess.Popen(cmd)
+        def _start_chrome() -> subprocess.Popen:
+            cmd = [
+                chrome_path,
+                f"--remote-debugging-port={self._debugger_port}",
+                f"--user-data-dir={user_data}",
+                "--disable-blink-features=AutomationControlled",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+            return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def _wait_port(max_seconds: float = 10) -> bool:
+            for _ in range(int(max_seconds * 2)):
+                time.sleep(0.5)
+                try:
+                    with socket.create_connection(("127.0.0.1", self._debugger_port), timeout=1):
+                        return True
+                except (ConnectionRefusedError, OSError):
+                    continue
+            return False
+
+        # 1차 시도
+        self._chrome_process = _start_chrome()
         self.log(f"Chrome 실행 (port={self._debugger_port})")
 
-        # 연결 대기: 고정 sleep 대신 retry
-        for _ in range(10):
-            time.sleep(0.5)
-            try:
-                with socket.create_connection(("127.0.0.1", self._debugger_port), timeout=1):
-                    break
-            except (ConnectionRefusedError, OSError):
-                continue
+        # Chrome이 즉시 종료되는지 확인 (기존 인스턴스에 위임한 경우)
+        time.sleep(1.5)
+        if self._chrome_process.poll() is not None:
+            self.log("기존 Chrome이 실행 중 — 종료 후 재시작합니다...")
+            # taskkill로 모든 Chrome 종료 (전용 프로필이므로 안전)
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "chrome.exe"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            time.sleep(2)
+
+            # lock 파일 정리
+            for name in ["lockfile", "SingletonLock"]:
+                lf = os.path.join(user_data, name)
+                if os.path.exists(lf):
+                    try:
+                        os.remove(lf)
+                    except OSError:
+                        pass
+
+            # 새 포트로 재시도
+            self._debugger_port = _find_free_port()
+            self._chrome_process = _start_chrome()
+            self.log(f"Chrome 재시작 (port={self._debugger_port})")
+
+        # 포트 대기
+        if _wait_port(10):
+            self.log("Chrome 준비 완료")
+        else:
+            self.log("경고: Chrome 포트 대기 타임아웃")
+
+    def _resolve_chromedriver(self) -> str:
+        """chromedriver 경로를 미리 확보 (Selenium Manager 지연 방지)"""
+        import glob
+
+        # 1. 캐시에서 직접 찾기
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "selenium", "chromedriver")
+        candidates = glob.glob(os.path.join(cache_dir, "**", "chromedriver.exe"), recursive=True)
+        if candidates:
+            # 가장 최신 버전 사용
+            candidates.sort(reverse=True)
+            return candidates[0]
+
+        # 2. Selenium Manager 실행하여 다운로드
+        self.log("chromedriver 다운로드 중 (최초 1회)...")
+        import subprocess as _sp
+        import sys
+        for p in sys.path:
+            se = os.path.join(p, "selenium", "webdriver", "common", "windows", "selenium-manager.exe")
+            if os.path.exists(se):
+                result = _sp.run(
+                    [se, "--browser", "chrome", "--output", "json"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    import json as _json
+                    data = _json.loads(result.stdout)
+                    driver_path = data.get("result", {}).get("driver_path", "")
+                    if driver_path and os.path.exists(driver_path):
+                        return driver_path
+                break
+
+        return ""  # fallback: Selenium이 자동 관리
 
     def connect(self) -> webdriver.Chrome:
         """실행 중인 Chrome에 연결"""
+        from selenium.webdriver.chrome.service import Service
+
         options = webdriver.ChromeOptions()
         options.add_experimental_option(
             "debuggerAddress", f"127.0.0.1:{self._debugger_port}"
         )
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
-        self.driver = webdriver.Chrome(options=options)
-        self.driver.implicitly_wait(5)
-        self.log("Chrome 연결 성공")
-        return self.driver
+        # chromedriver 경로 직접 지정 (Selenium Manager 지연 방지)
+        chromedriver_path = self._resolve_chromedriver()
+
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                self.log(f"Chrome 연결 시도 {attempt}/3...")
+                if chromedriver_path:
+                    svc = Service(chromedriver_path)
+                    self.driver = webdriver.Chrome(service=svc, options=options)
+                else:
+                    self.driver = webdriver.Chrome(options=options)
+                self.driver.implicitly_wait(5)
+                self.log("Chrome 연결 성공")
+                return self.driver
+            except Exception as e:
+                last_error = e
+                self.log(f"연결 실패 {attempt}/3: {type(e).__name__}: {str(e)[:80]}")
+                time.sleep(2)
+
+        raise ConnectionError(f"Chrome 연결 실패 (3회): {last_error}")
 
     # ── 로그인 ──
 
