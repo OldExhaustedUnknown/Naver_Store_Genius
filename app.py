@@ -78,7 +78,6 @@ class AutoBuyerApp(ctk.CTk):
 
         self.scheduler = PurchaseScheduler(log_callback=self._log)
         self.scheduler.on_countdown = self._update_countdown
-        self.scheduler.on_complete = self._on_complete
         self.scheduler.on_retry_update = self._on_retry_update
 
         self._build_ui()
