@@ -472,14 +472,38 @@ class AutoBuyerApp(ctk.CTk):
         btn_frame = ctk.CTkFrame(main, fg_color="transparent")
         btn_frame.pack(fill="x", padx=16, pady=10)
 
-        self.start_btn = self._btn_primary(btn_frame, "예약 시작", self._on_start)
-        self.start_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
-
-        self.stop_btn = self._btn_danger(btn_frame, "중지", self._on_stop, state="disabled")
-        self.stop_btn.pack(side="left", expand=True, fill="x", padx=4)
-
+        self._btn_primary(btn_frame, "스케줄 추가", self._add_schedule, width=120).pack(side="left", padx=(0, 4))
+        self.start_all_btn = self._btn_primary(btn_frame, "전체 시작", self._start_all)
+        self.start_all_btn.pack(side="left", expand=True, fill="x", padx=4)
+        self.stop_all_btn = self._btn_danger(btn_frame, "전체 중지", self._stop_all, state="disabled")
+        self.stop_all_btn.pack(side="left", expand=True, fill="x", padx=4)
         self.save_btn = self._btn_secondary(btn_frame, "설정 저장", self._save_config)
         self.save_btn.pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+        # ── 스케줄 리스트 카드 ──
+        sched_card = self._card(main)
+        sched_card.pack(fill="x", padx=16, pady=6)
+
+        self._section_title(sched_card, "스케줄 목록")
+
+        self.schedule_list_frame = ctk.CTkFrame(sched_card, fg_color="transparent")
+        self.schedule_list_frame.pack(fill="x", padx=18, pady=(0, 12))
+
+        # 헤더
+        hdr = ctk.CTkFrame(self.schedule_list_frame, fg_color=T["bg_section"], corner_radius=6)
+        hdr.pack(fill="x", pady=(0, 4))
+        for text, w in [("상품", 200), ("시간", 100), ("수량", 40), ("옵션", 100), ("상태", 70), ("", 60)]:
+            ctk.CTkLabel(
+                hdr, text=text, width=w,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+                text_color=T["text_tertiary"],
+            ).pack(side="left", padx=4, pady=4)
+
+        self.schedule_rows_frame = ctk.CTkFrame(self.schedule_list_frame, fg_color="transparent")
+        self.schedule_rows_frame.pack(fill="x")
+
+        # 스케줄 데이터 저장소
+        self.schedules: list[dict] = []
 
         # ── 로그 카드 ──
         log_card = self._card(main)
@@ -735,17 +759,12 @@ class AutoBuyerApp(ctk.CTk):
     #  이벤트 핸들러
     # ══════════════════════════════════════════════
 
-    def _on_start(self):
+    def _collect_form_data(self) -> dict | None:
+        """현재 폼에서 스케줄 데이터 수집"""
         url = self.url_combo.get().strip()
         if not url:
             self._log("상품 URL을 입력하세요.")
-            return
-        if not validate_smartstore_url(url):
-            if not messagebox.askyesno(
-                "URL 확인",
-                "네이버 스마트스토어 URL이 아닌 것 같습니다.\n그래도 계속하시겠습니까?",
-            ):
-                return
+            return None
 
         try:
             date_str = self.date_entry.get().strip()
@@ -753,50 +772,28 @@ class AutoBuyerApp(ctk.CTk):
             purchase_dt = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=h, minute=m, second=s)
         except (ValueError, AttributeError):
             self._log("구매 일시 형식 오류 (YYYY-MM-DD)")
-            return
+            return None
 
         if purchase_dt <= datetime.now():
             self._log(f"구매 시간이 과거입니다: {purchase_dt}")
-            return
+            return None
 
         try:
             qty = int(self.qty_entry.get().strip() or "1")
         except ValueError:
             self._log("수량은 숫자여야 합니다.")
-            return
+            return None
         if qty < 1 or qty > 99:
             self._log("수량은 1~99 사이여야 합니다.")
-            return
+            return None
 
         options = {}
-        opt_desc = []
-        for i, entry in enumerate(self.option_combos, 1):
-            val = entry.get().strip()
+        opt_parts = []
+        for i, combo in enumerate(self.option_combos, 1):
+            val = combo.get().strip()
             options[f"option{i}"] = val if val else None
             if val:
-                opt_desc.append(f"옵션{i}={val}")
-
-        opt_text = ", ".join(opt_desc) if opt_desc else "없음"
-        retry_text = ""
-        if self.retry_var.get():
-            ri = self.retry_interval_entry.get().strip()
-            rm = self.retry_max_entry.get().strip()
-            retry_text = f"\n재시도: {ri}초 간격, 최대 {rm}회"
-
-        confirm_msg = (
-            f"다음 설정으로 자동 구매를 시작합니다:\n\n"
-            f"URL: {url[:50]}...\n"
-            f"구매 시간: {purchase_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"수량: {qty}개\n"
-            f"옵션: {opt_text}"
-            f"{retry_text}\n\n"
-            f"실제 주문이 이루어집니다. 계속하시겠습니까?"
-        )
-        if not messagebox.askyesno("구매 확인", confirm_msg, icon="warning"):
-            self._log("시작 취소됨")
-            return
-
-        self._total_wait = (purchase_dt - datetime.now()).total_seconds()
+                opt_parts.append(val)
 
         try:
             retry_interval = float(self.retry_interval_entry.get().strip() or "1.0")
@@ -805,54 +802,145 @@ class AutoBuyerApp(ctk.CTk):
             retry_interval = 1.0
             retry_max = 60
 
+        return {
+            "url": url,
+            "purchase_dt": purchase_dt,
+            "quantity": qty,
+            "options": options,
+            "opt_desc": ", ".join(opt_parts) if opt_parts else "",
+            "retry_enabled": self.retry_var.get(),
+            "retry_interval": retry_interval,
+            "retry_max": retry_max,
+            "status": "대기",
+            "scheduler": None,
+        }
+
+    def _add_schedule(self):
+        """현재 폼 데이터로 스케줄 추가"""
+        data = self._collect_form_data()
+        if not data:
+            return
+        for s in self.schedules:
+            if s["url"] == data["url"] and s["purchase_dt"] == data["purchase_dt"]:
+                self._log("동일 URL/시간 스케줄이 이미 있습니다.")
+                return
+        self.schedules.append(data)
+        self._render_schedules()
+        dt_str = data["purchase_dt"].strftime("%H:%M:%S")
+        self._log(f"스케줄 추가: {data['url'][:40]}... @ {dt_str} x{data['quantity']}")
+        # URL 히스토리
+        url = data["url"]
+        if url not in self.url_history:
+            self.url_history.insert(0, url)
+            self.url_history = self.url_history[:10]
+            self.url_combo.configure(values=self.url_history)
+
+    def _render_schedules(self):
+        """스케줄 리스트 렌더링"""
+        for w in self.schedule_rows_frame.winfo_children():
+            w.destroy()
+        for idx, sched in enumerate(self.schedules):
+            row = ctk.CTkFrame(self.schedule_rows_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            url_short = sched["url"].split("/")[-1][:25] if "/" in sched["url"] else sched["url"][:25]
+            ctk.CTkLabel(row, text=url_short, width=200, anchor="w",
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12), text_color=T["text_primary"],
+            ).pack(side="left", padx=4)
+            ctk.CTkLabel(row, text=sched["purchase_dt"].strftime("%m/%d %H:%M:%S"), width=100,
+                font=ctk.CTkFont(family=FONT_MONO, size=12), text_color=T["text_secondary"],
+            ).pack(side="left", padx=4)
+            ctk.CTkLabel(row, text=str(sched["quantity"]), width=40,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12), text_color=T["text_secondary"],
+            ).pack(side="left", padx=4)
+            ctk.CTkLabel(row, text=sched["opt_desc"] or "-", width=100, anchor="w",
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=T["text_tertiary"],
+            ).pack(side="left", padx=4)
+            status = sched["status"]
+            sc = {"대기": T["text_hint"], "실행 중": T["primary"], "완료": T["info"], "실패": T["danger"]}.get(status, T["text_hint"])
+            ctk.CTkLabel(row, text=status, width=70,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"), text_color=sc,
+            ).pack(side="left", padx=4)
+            ctk.CTkButton(row, text="X", width=30, height=24,
+                fg_color=T["bg_section"], hover_color=T["danger"],
+                text_color=T["text_tertiary"], corner_radius=4, font=ctk.CTkFont(size=11),
+                command=lambda i=idx: self._remove_schedule(i),
+            ).pack(side="left", padx=4)
+        if not self.schedules:
+            ctk.CTkLabel(self.schedule_rows_frame, text="스케줄 없음 — 위에서 설정 후 '스케줄 추가' 클릭",
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12), text_color=T["text_hint"],
+            ).pack(pady=8)
+
+    def _remove_schedule(self, idx: int):
+        if 0 <= idx < len(self.schedules):
+            s = self.schedules[idx]
+            if s["scheduler"] and s["scheduler"].is_running:
+                s["scheduler"].stop()
+            self.schedules.pop(idx)
+            self._render_schedules()
+            self._log(f"스케줄 {idx+1} 삭제")
+
+    def _start_all(self):
+        """모든 대기 스케줄 시작"""
+        pending = [s for s in self.schedules if s["status"] == "대기"]
+        if not pending:
+            self._log("시작할 스케줄이 없습니다. '스케줄 추가'를 먼저 하세요.")
+            return
+        if not messagebox.askyesno("전체 시작", f"{len(pending)}개 스케줄 시작.\n실제 주문이 이루어집니다.", icon="warning"):
+            return
         pre_nav = int(self.pre_nav_entry.get().strip() or "30")
         profile = self.profile_entry.get().strip()
+        for i, sched in enumerate(pending):
+            scheduler = PurchaseScheduler(log_callback=self._log)
+            scheduler.on_countdown = self._update_countdown
+            scheduler.on_complete = lambda s=sched: self._on_schedule_complete(s)
+            if i == 0 and self.scheduler.browser.driver is not None:
+                scheduler.browser = self.scheduler.browser
+            scheduler.configure(
+                product_url=sched["url"], purchase_time=sched["purchase_dt"],
+                options=sched["options"], quantity=sched["quantity"],
+                use_ntp=self.ntp_var.get(), chrome_profile=profile,
+                pre_navigate_seconds=pre_nav, retry_enabled=sched["retry_enabled"],
+                retry_preset="custom", retry_interval=sched["retry_interval"],
+                retry_max=sched["retry_max"],
+            )
+            sched["scheduler"] = scheduler
+            sched["status"] = "실행 중"
+            scheduler.start()
+        self.start_all_btn.configure(state="disabled")
+        self.stop_all_btn.configure(state="normal")
+        self.status_label.configure(text=f"{len(pending)}개 실행 중", fg_color=T["primary"])
+        self._render_schedules()
+        self._log(f"전체 시작: {len(pending)}개 스케줄")
 
-        self.scheduler.configure(
-            product_url=url,
-            purchase_time=purchase_dt,
-            options=options,
-            quantity=qty,
-            use_ntp=self.ntp_var.get(),
-            chrome_profile=profile,
-            pre_navigate_seconds=pre_nav,
-            retry_enabled=self.retry_var.get(),
-            retry_preset="custom",
-            retry_interval=retry_interval,
-            retry_max=retry_max,
-        )
-
-        self.start_btn.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
-        self.status_label.configure(text="실행 중", fg_color=T["primary"])
-        self.retry_label.configure(text="")
-
-        self._log(f"스케줄 시작: {purchase_dt.strftime('%Y-%m-%d %H:%M:%S')} | 수량: {qty} | {opt_text}")
-        self.scheduler.start()
-
-    def _on_stop(self):
-        self.scheduler.stop()
-        self.start_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
+    def _stop_all(self):
+        for s in self.schedules:
+            if s["scheduler"] and s["scheduler"].is_running:
+                s["scheduler"].stop()
+                s["status"] = "대기"
+        self.start_all_btn.configure(state="normal")
+        self.stop_all_btn.configure(state="disabled")
         self.status_label.configure(text="중지됨", fg_color=T["danger"])
         self.countdown_label.configure(text="00:00:00.000", text_color=T["countdown_normal"])
         self.progress_bar.set(0)
-        self.retry_label.configure(text="")
+        self._render_schedules()
+        self._log("전체 중지")
 
-    def _on_complete(self):
-        self.after(0, self._ui_complete)
-
-    def _ui_complete(self):
-        self.start_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
-        self.status_label.configure(text="완료", fg_color=T["warning"])
-        self.progress_bar.set(1)
-        # 사운드 알림
-        try:
-            import winsound
-            winsound.MessageBeep(winsound.MB_ICONASTERISK)
-        except Exception:
-            pass
+    def _on_schedule_complete(self, sched: dict):
+        sched["status"] = "완료"
+        self.after(0, self._render_schedules)
+        running = [s for s in self.schedules if s["status"] == "실행 중"]
+        if not running:
+            def _done():
+                self.start_all_btn.configure(state="normal")
+                self.stop_all_btn.configure(state="disabled")
+                self.status_label.configure(text="전체 완료", fg_color=T["warning"])
+                self.progress_bar.set(1)
+                try:
+                    import winsound
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except Exception:
+                    pass
+            self.after(0, _done)
 
     def _on_retry_update(self, current: int, max_retries: int, status: str):
         def _update():
@@ -865,15 +953,23 @@ class AutoBuyerApp(ctk.CTk):
         self.after(0, _update)
 
     def _on_close(self):
-        if self.scheduler.is_running:
-            if not messagebox.askyesno("종료 확인", "스케줄러가 실행 중입니다. 정말 종료하시겠습니까?"):
+        running = [s for s in self.schedules if s.get("scheduler") and s["scheduler"].is_running]
+        if running:
+            if not messagebox.askyesno("종료 확인", f"{len(running)}개 스케줄이 실행 중입니다. 정말 종료하시겠습니까?"):
                 return
-            self.scheduler.stop()
-        # Chrome/chromedriver 프로세스 정리 (임시 폴더 잠금 방지)
+            for s in running:
+                s["scheduler"].stop()
+        # Chrome/chromedriver 정리
         try:
             self.scheduler.browser.quit()
         except Exception:
             pass
+        for s in self.schedules:
+            if s.get("scheduler") and s["scheduler"].browser:
+                try:
+                    s["scheduler"].browser.quit()
+                except Exception:
+                    pass
         self.destroy()
 
     # ══════════════════════════════════════════════
