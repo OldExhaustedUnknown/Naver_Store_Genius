@@ -283,7 +283,8 @@ class AutoBuyerApp(ctk.CTk):
         url_row.pack(fill="x", padx=18, pady=3)
         self._label(url_row, "상품 URL").pack(side="left")
         self.url_entry = self._entry(url_row, placeholder="https://smartstore.naver.com/...")
-        self.url_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self._btn_secondary(url_row, "미리보기", self._preview_product, width=80).pack(side="left")
 
         time_row = ctk.CTkFrame(prod_card, fg_color="transparent")
         time_row.pack(fill="x", padx=18, pady=3)
@@ -553,6 +554,36 @@ class AutoBuyerApp(ctk.CTk):
         self.api_key_entry.delete(0, "end")
         self.api_status.configure(text="삭제됨", text_color=T["warning"])
         self._log("API 키가 삭제되었습니다.")
+
+    def _preview_product(self):
+        """상품 URL을 Chrome에서 미리 열어 옵션/상태 확인"""
+        url = self.url_entry.get().strip()
+        if not url:
+            self._log("상품 URL을 입력하세요.")
+            return
+
+        profile = self.profile_entry.get().strip()
+
+        def _open():
+            browser = self.scheduler.browser
+            try:
+                if browser.driver is not None:
+                    try:
+                        browser.driver.title
+                    except Exception:
+                        browser.driver = None
+
+                if browser.driver is None:
+                    browser.launch_chrome(profile)
+                    browser.connect()
+
+                browser.navigate(url)
+                browser.restore_window()
+                self._log(f"상품 페이지 열림: {url[:50]}...")
+            except Exception as e:
+                self._log(f"미리보기 오류: {e}")
+
+        threading.Thread(target=_open, daemon=True).start()
 
     def _load_saved_credentials(self):
         nid, _ = load_credentials()
