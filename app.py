@@ -445,14 +445,21 @@ class AutoBuyerApp(ctk.CTk):
         def verify():
             browser = self.scheduler.browser
             try:
-                # 1. Chrome 실행
-                self._log("[1/4] Chrome 실행 중...")
-                browser.launch_chrome(profile)
+                # 1+2. Chrome 실행 및 연결 (이미 연결되어 있으면 재사용)
+                if browser.driver is not None:
+                    self._log("기존 Chrome 세션 재사용")
+                    try:
+                        browser.driver.title  # 연결 유효성 확인
+                    except Exception:
+                        self._log("기존 세션 끊김 — 재연결...")
+                        browser.driver = None
 
-                # 2. Selenium 연결
-                self._log("[2/4] Chrome 연결 중...")
-                browser.connect()
-                self._log("[2/4] Chrome 연결 성공")
+                if browser.driver is None:
+                    self._log("[1/4] Chrome 실행 중...")
+                    browser.launch_chrome(profile)
+                    self._log("[2/4] Chrome 연결 중...")
+                    browser.connect()
+                    self._log("[2/4] Chrome 연결 성공")
 
                 # 3. 네이버 로그인 페이지로 이동
                 self._log("[3/4] 네이버 로그인 상태 확인 중...")
