@@ -377,72 +377,8 @@ class BrowserManager:
             return False
 
     def _solve_captcha(self) -> bool:
-        """캡챠 이미지를 캡처하여 Claude API로 풀이 후 답 입력"""
-        api_key = load_api_key()
-        if not api_key:
-            self.log("Claude API 키가 없습니다. GUI에서 설정해주세요.")
-            return False
-
-        try:
-            import base64
-            import anthropic
-
-            # 1. 캡챠 이미지 캡처
-            captcha_img = self._capture_captcha_image()
-            if not captcha_img:
-                self.log("캡챠 이미지를 찾을 수 없습니다.")
-                return False
-
-            # 2. Claude API로 풀이
-            self.log("Claude API로 캡챠 분석 중...")
-            client = anthropic.Anthropic(api_key=api_key)
-
-            img_b64 = base64.b64encode(captcha_img).decode("utf-8")
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=100,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": img_b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "이것은 네이버 로그인 캡챠 이미지입니다. "
-                                "질문에 대한 정답을 숫자만 답해주세요. "
-                                "예: 영수증에서 총 몇 종류인지 묻는다면 숫자만 답해주세요. "
-                                "정답만 출력하세요. 다른 설명 없이 숫자나 텍스트 답만."
-                            ),
-                        },
-                    ],
-                }],
-            )
-
-            answer = message.content[0].text.strip()
-            self.log(f"캡챠 답: {answer}")
-
-            # 3. 답 입력
-            answer_input = self.driver.find_element(
-                By.CSS_SELECTOR,
-                "input#captcha, input[name='captcha'], input[placeholder*='정답'], input[placeholder*='입력']"
-            )
-            answer_input.clear()
-            answer_input.send_keys(answer)
-            time.sleep(0.3)
-
-            self.log("캡챠 답 입력 완료")
-            return True
-
-        except Exception as e:
-            self.log(f"캡챠 풀이 오류: {e}")
-            return False
+        """로그인 캡챠 풀이 — _solve_page_captcha와 동일 로직 사용"""
+        return self._solve_page_captcha()
 
     def _capture_captcha_image(self) -> Optional[bytes]:
         """캡챠 이미지 영역을 스크린샷으로 캡처"""
@@ -528,7 +464,7 @@ class BrowserManager:
                     break
 
     def _solve_page_captcha(self) -> bool:
-        """페이지 접근 캡챠 풀이 (로그인 캡챠와 다른 구조)"""
+        """페이지 접근 캡챠 풀이 — 질문 텍스트 + 이미지를 Claude에 전송"""
         api_key = load_api_key()
         if not api_key:
             self.log("Claude API 키가 없어 캡챠를 풀 수 없습니다.")
@@ -536,19 +472,37 @@ class BrowserManager:
 
         try:
             import base64
+            import re
             import anthropic
 
-            # 캡챠 영역 스크린샷
+            # 1. 질문 텍스트 추출
+            question_text = self._extract_captcha_question()
+            self.log(f"캡챠 질문: {question_text}")
+
+            # 2. 캡챠 이미지 캡처
             captcha_img = self._capture_captcha_image()
             if not captcha_img:
                 return False
 
+            # 3. Claude API 호출 — 질문 텍스트 + 이미지
             client = anthropic.Anthropic(api_key=api_key)
             img_b64 = base64.b64encode(captcha_img).decode("utf-8")
 
+            prompt = (
+                f"네이버 보안 캡챠입니다.\n\n"
+                f"질문: {question_text}\n\n"
+                f"위 이미지(영수증 등)를 분석하여 질문에 대한 정답만 답해주세요.\n"
+                f"규칙:\n"
+                f"- [?] 또는 빈 칸에 들어갈 값만 출력\n"
+                f"- 숫자만 필요하면 숫자만 (하이픈, 쉼표 등 기호 절대 포함하지 마세요)\n"
+                f"- 텍스트가 필요하면 텍스트만\n"
+                f"- 다른 설명, 문장, 부연 없이 정답만 한 줄로 출력\n"
+                f"- 예시: 질문이 '새재길 [?]'이면 도로명 뒤 번지수만 출력 (예: 243)"
+            )
+
             message = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=100,
+                max_tokens=50,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -560,28 +514,25 @@ class BrowserManager:
                                 "data": img_b64,
                             },
                         },
-                        {
-                            "type": "text",
-                            "text": (
-                                "네이버 보안 확인 캡챠입니다. "
-                                "이미지를 분석하고 질문에 대한 정답만 답해주세요. "
-                                "숫자, 텍스트 등 정답만 출력하세요. 다른 설명 없이."
-                            ),
-                        },
+                        {"type": "text", "text": prompt},
                     ],
                 }],
             )
 
             answer = message.content[0].text.strip()
+            # 후처리: 숫자만 필요한 경우 숫자 외 문자 제거
+            if question_text and ("[?]" in question_text or "빈 칸" in question_text):
+                clean = re.sub(r"[^\d]", "", answer)
+                if clean:
+                    answer = clean
             self.log(f"캡챠 답: {answer}")
 
-            # 답 입력 필드 찾기
+            # 4. 답 입력
             input_selectors = [
                 "input[placeholder*='정답']",
                 "input[placeholder*='입력']",
                 "input#captcha",
                 "input[name='captcha']",
-                "input[type='text']:not([type='hidden'])",
             ]
             for selector in input_selectors:
                 try:
@@ -590,32 +541,89 @@ class BrowserManager:
                         inp.clear()
                         inp.send_keys(answer)
                         time.sleep(0.3)
-
-                        # 확인 버튼 클릭
-                        confirm_selectors = [
-                            "button[class*='confirm']",
-                            "button[type='submit']",
-                            "//button[contains(text(),'확인')]",
-                        ]
-                        for cs in confirm_selectors:
-                            try:
-                                if cs.startswith("//"):
-                                    btn = self.driver.find_element(By.XPATH, cs)
-                                else:
-                                    btn = self.driver.find_element(By.CSS_SELECTOR, cs)
-                                btn.click()
-                                self.log("캡챠 답 제출 완료")
-                                return True
-                            except NoSuchElementException:
-                                continue
                         break
+                except NoSuchElementException:
+                    continue
+            else:
+                # 마지막 fallback: 보이는 text input
+                try:
+                    inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                    for inp in inputs:
+                        if inp.is_displayed() and inp.get_attribute("type") != "hidden":
+                            inp.clear()
+                            inp.send_keys(answer)
+                            break
+                except Exception:
+                    pass
+
+            # 5. 확인 버튼 클릭
+            for cs in ["//button[contains(text(),'확인')]", "button[type='submit']", "button[class*='btn_confirm']"]:
+                try:
+                    if cs.startswith("//"):
+                        btn = self.driver.find_element(By.XPATH, cs)
+                    else:
+                        btn = self.driver.find_element(By.CSS_SELECTOR, cs)
+                    btn.click()
+                    self.log("캡챠 답 제출")
+                    return True
                 except NoSuchElementException:
                     continue
 
             return False
         except Exception as e:
-            self.log(f"페이지 캡챠 풀이 오류: {e}")
+            self.log(f"캡챠 풀이 오류: {e}")
             return False
+
+    def _extract_captcha_question(self) -> str:
+        """캡챠 페이지에서 질문 텍스트 추출"""
+        try:
+            page = self.driver.page_source
+            # 빨간/초록 강조 텍스트에 질문이 있음
+            question_selectors = [
+                "span[class*='highlight']",
+                "p[class*='question']",
+                "strong[class*='question']",
+                "div[class*='captcha'] p",
+                "div[class*='captcha'] span",
+            ]
+            for selector in question_selectors:
+                try:
+                    elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elems:
+                        text = elem.text.strip()
+                        if text and ("?" in text or "[?]" in text or "빈 칸" in text):
+                            return text
+                except Exception:
+                    continue
+
+            # 전체 페이지에서 질문 패턴 추출
+            import re
+            patterns = [
+                r"(영수증[^.]*\?[^.]*\.)",
+                r"(가게[^.]*\?[^.]*\.)",
+                r"([^.]*\[?\?\][^.]*\.)",
+                r"([^.]*빈 칸[^.]*\.)",
+                r"(구매한[^.]*\?)",
+                r"(총[^.]*종류[^.]*\?)",
+            ]
+            for pat in patterns:
+                match = re.search(pat, page)
+                if match:
+                    return match.group(1).strip()
+
+            # 마지막 수단: 보이는 텍스트 중 질문 같은 것
+            try:
+                body_text = self.driver.find_element(By.TAG_NAME, "body").text
+                for line in body_text.split("\n"):
+                    line = line.strip()
+                    if "?" in line or "[?]" in line or "빈 칸" in line:
+                        return line
+            except Exception:
+                pass
+
+            return "(질문을 찾을 수 없음)"
+        except Exception:
+            return "(질문 추출 실패)"
 
     def wait_and_click(self, by: str, value: str, timeout: int = 10) -> bool:
         try:
