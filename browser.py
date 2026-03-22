@@ -626,79 +626,67 @@ class BrowserManager:
             return "(질문 추출 실패)"
 
     def extract_product_options(self) -> list[dict]:
-        """현재 페이지에서 상품 옵션 목록을 추출.
+        """현재 스마트스토어 페이지에서 옵션 추출.
 
-        Returns: [{"name": "소금간 선택", "values": ["순한맛", "보통맛", ...]}]
+        DOM 구조:
+        - 드롭다운: a[role="button"][aria-haspopup="listbox"]
+        - 옵션 리스트: ul[role="listbox"]
+        - 각 항목: a[role="option"][data-shp-contents-id="일반"]
         """
         results = []
         try:
             time.sleep(1)
+            from selenium.webdriver.common.keys import Keys
 
-            # 드롭다운 그룹 찾기 — 여러 셀렉터 시도
-            group_selectors = [
-                "div[class*='option_area'] > div",
-                "div[class*='_optionArea'] > div",
-                "div[class*='select_box']",
-                "div[class*='_selectOption']",
-                "div[class*='option_group']",
-            ]
+            # 드롭다운 버튼 찾기: aria-haspopup="listbox"
+            dropdowns = self.driver.find_elements(
+                By.CSS_SELECTOR, 'a[role="button"][aria-haspopup="listbox"]'
+            )
 
-            groups = []
-            for sel in group_selectors:
-                groups = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                if groups:
-                    break
+            if not dropdowns:
+                self.log("옵션 드롭다운 없음 (옵션 없는 상품)")
+                return results
 
-            if not groups:
-                # 단일 드롭다운 페이지
-                groups = self.driver.find_elements(
-                    By.CSS_SELECTOR,
-                    "div[class*='select'] > button, div[class*='select'] > a[role='button']"
-                )
+            self.log(f"드롭다운 {len(dropdowns)}개 발견")
 
-            for idx, group in enumerate(groups):
-                option_info = {"name": f"옵션 {idx + 1}", "values": []}
+            for dd in dropdowns:
+                name = dd.text.strip() or "옵션"
+                option_info = {"name": name, "values": []}
+
                 try:
-                    # 드롭다운 제목 추출
-                    title_el = group.find_element(By.CSS_SELECTOR, "label, span, button")
-                    title = title_el.text.strip()
-                    if title:
-                        option_info["name"] = title
+                    # 클릭하여 리스트 열기
+                    dd.click()
+                    time.sleep(0.5)
 
-                    # 드롭다운 클릭하여 옵션 목록 열기
-                    clickable = group.find_elements(By.CSS_SELECTOR, "button, a[role='button'], a")
-                    if clickable:
-                        clickable[0].click()
-                        time.sleep(0.5)
+                    # ul[role="listbox"] 안의 a[role="option"] 추출
+                    option_links = self.driver.find_elements(
+                        By.CSS_SELECTOR, 'ul[role="listbox"] a[role="option"]'
+                    )
 
-                        # 옵션 항목 추출
-                        items = self.driver.find_elements(
-                            By.CSS_SELECTOR,
-                            "li[class*='option'], ul[role='listbox'] li, ul[class*='opt'] li, div[class*='option_list'] li"
-                        )
-                        for item in items:
-                            text = item.text.strip()
-                            if text and text != option_info["name"]:
-                                option_info["values"].append(text)
+                    for link in option_links:
+                        # data-shp-contents-id 속성에 옵션값이 있음
+                        opt_id = link.get_attribute("data-shp-contents-id") or ""
+                        opt_text = link.text.strip().split("\n")[0]  # 첫 줄만
 
-                        # 드롭다운 닫기 (Escape)
-                        from selenium.webdriver.common.keys import Keys
-                        try:
-                            self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-                        except Exception:
-                            pass
-                        time.sleep(0.3)
+                        value = opt_id if opt_id else opt_text
+                        if value and "선택" not in value:
+                            option_info["values"].append(value)
 
-                except Exception:
-                    pass
+                    # 닫기
+                    try:
+                        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+
+                except Exception as e:
+                    self.log(f"드롭다운 '{name}' 처리 오류: {e}")
 
                 if option_info["values"]:
                     results.append(option_info)
 
             if results:
                 self.log(f"옵션 {len(results)}개 그룹 추출 완료")
-            else:
-                self.log("추출 가능한 옵션이 없습니다 (옵션 없는 상품이거나 품절)")
 
         except Exception as e:
             self.log(f"옵션 추출 오류: {e}")
@@ -746,52 +734,25 @@ class BrowserManager:
             return False
 
     def select_option_by_text(self, option_text: str, option_group: int = 1) -> bool:
-        """상품 옵션을 텍스트로 선택.
+        """상품 옵션을 텍스트 또는 번호로 선택.
 
-        option_text: 선택할 옵션 텍스트 (예: "순한맛", "L", "블랙")
-                     숫자만 입력하면 N번째 옵션 선택 (하위 호환)
-        option_group: 몇 번째 드롭다운인지 (1부터)
+        스마트스토어 DOM:
+        - 드롭다운: a[role="button"][aria-haspopup="listbox"]
+        - 항목: ul[role="listbox"] a[role="option"]
         """
-        # 숫자만 입력된 경우 → N번째 옵션 선택
         is_index = option_text.isdigit()
 
-        # 드롭다운 찾기 — 여러 셀렉터 시도
-        dropdown_selectors = [
-            "div[class*='_selectOption'] > div, div[class*='select_box']",
-            "a[role='button'][class*='select']",
-            "div[class*='_optionSelect']",
-            "div[class*='option'] > button, div[class*='option'] > a",
-            # 스크린샷에서 본 "소금간 선택" 같은 드롭다운
-            "div[class*='select'] button, div[class*='select'] a",
-        ]
-
-        dropdown = None
-        for selector in dropdown_selectors:
-            try:
-                elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                if len(elems) >= option_group:
-                    dropdown = elems[option_group - 1]
-                    break
-            except Exception:
-                continue
-
-        if not dropdown:
-            # XPath로 재시도 — 텍스트로 드롭다운 찾기
-            try:
-                dropdowns = self.driver.find_elements(
-                    By.XPATH,
-                    "//div[contains(@class,'select')]//button | //div[contains(@class,'select')]//a[@role='button']"
-                )
-                if len(dropdowns) >= option_group:
-                    dropdown = dropdowns[option_group - 1]
-            except Exception:
-                pass
-
-        if not dropdown:
+        # 드롭다운 찾기
+        dropdowns = self.driver.find_elements(
+            By.CSS_SELECTOR, 'a[role="button"][aria-haspopup="listbox"]'
+        )
+        if len(dropdowns) < option_group:
             self.log(f"옵션 드롭다운 {option_group}번째를 찾을 수 없습니다.")
             return False
 
-        # 드롭다운 클릭하여 옵션 목록 열기
+        dropdown = dropdowns[option_group - 1]
+
+        # 클릭하여 열기
         try:
             dropdown.click()
             time.sleep(0.5)
@@ -799,32 +760,10 @@ class BrowserManager:
             self.log(f"드롭다운 클릭 실패: {e}")
             return False
 
-        # 옵션 항목 찾기
-        item_selectors = [
-            "li[class*='option']",
-            "ul[class*='option'] li",
-            "div[class*='option_list'] li",
-            "ul[role='listbox'] li",
-            "div[class*='select'] ul li",
-        ]
-
-        items = []
-        for selector in item_selectors:
-            try:
-                items = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                if items:
-                    break
-            except Exception:
-                continue
-
-        if not items:
-            # XPath 재시도
-            try:
-                items = self.driver.find_elements(
-                    By.XPATH, "//ul[contains(@class,'opt')]//li | //ul[@role='listbox']//li"
-                )
-            except Exception:
-                pass
+        # 옵션 항목: a[role="option"]
+        items = self.driver.find_elements(
+            By.CSS_SELECTOR, 'ul[role="listbox"] a[role="option"]'
+        )
 
         if not items:
             self.log("옵션 항목을 찾을 수 없습니다.")
@@ -845,22 +784,25 @@ class BrowserManager:
                 self.log(f"옵션 인덱스 {idx}가 범위 밖 (총 {len(items)}개)")
                 return False
         else:
-            # 텍스트 매칭
+            # 텍스트 or data-shp-contents-id 매칭
             for item in items:
                 try:
                     item_text = item.text.strip()
-                    if option_text in item_text or item_text in option_text:
+                    contents_id = item.get_attribute("data-shp-contents-id") or ""
+                    if (option_text in item_text or item_text in option_text or
+                            option_text == contents_id):
                         item.click()
-                        self.log(f"옵션 선택: '{item_text}'")
+                        self.log(f"옵션 선택: '{contents_id or item_text}'")
                         return True
                 except Exception:
                     continue
 
-            # 부분 매칭 재시도
+            # 부분 매칭
             for item in items:
                 try:
                     item_text = item.text.strip().lower()
-                    if option_text.lower() in item_text:
+                    contents_id = (item.get_attribute("data-shp-contents-id") or "").lower()
+                    if option_text.lower() in item_text or option_text.lower() in contents_id:
                         item.click()
                         self.log(f"옵션 선택 (부분매칭): '{item.text.strip()}'")
                         return True

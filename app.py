@@ -287,17 +287,20 @@ class AutoBuyerApp(ctk.CTk):
 
         self.url_history: list[str] = []
         self.url_combo = ctk.CTkComboBox(
-            url_row, values=[], width=340,
+            url_row, values=[], width=300,
             font=ctk.CTkFont(family=FONT_FAMILY, size=13),
             fg_color=T["bg_white"], border_color=T["border_input"],
             text_color=T["text_primary"], button_color=T["border_default"],
             dropdown_fg_color=T["bg_white"], dropdown_text_color=T["text_primary"],
             corner_radius=8,
         )
-        self.url_combo.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self.url_combo.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self.url_combo.set("")
 
-        self._btn_primary(url_row, "미리보기 + 옵션", self._preview_and_fetch, width=120).pack(side="left")
+        url_btn_row = ctk.CTkFrame(prod_card, fg_color="transparent")
+        url_btn_row.pack(fill="x", padx=18, pady=(0, 3))
+        ctk.CTkLabel(url_btn_row, text="", width=90).pack(side="left")  # 라벨 너비만큼 들여쓰기
+        self._btn_primary(url_btn_row, "미리보기 + 옵션 가져오기", self._preview_and_fetch, width=200).pack(side="left")
 
         # 날짜
         date_row = ctk.CTkFrame(prod_card, fg_color="transparent")
@@ -475,7 +478,8 @@ class AutoBuyerApp(ctk.CTk):
         self.start_all_btn = self._btn_primary(btn_frame, "전체 시작", self._start_all)
         self.start_all_btn.pack(side="left", expand=True, fill="x", padx=4)
         self.stop_all_btn = self._btn_danger(btn_frame, "중지", self._stop_all, state="disabled")
-        self.stop_all_btn.pack(side="left", expand=True, fill="x", padx=(4, 0))
+        self.stop_all_btn.pack(side="left", expand=True, fill="x", padx=4)
+        self._btn_secondary(btn_frame, "저장", self._save_config, width=60).pack(side="left")
 
         # ── 스케줄 리스트 카드 ──
         sched_card = self._card(main)
