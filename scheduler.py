@@ -56,7 +56,9 @@ class PurchaseScheduler:
         retry_preset: str = "normal",
         retry_interval: float = 1.0,
         retry_max: int = 60,
+        test_mode: bool = False,
     ):
+        self.test_mode = test_mode
         self.product_url = product_url
         self.purchase_time = purchase_time
         self.options = options
@@ -212,16 +214,34 @@ class PurchaseScheduler:
         return False
 
     def _do_purchase(self) -> bool:
-        """실제 구매 프로세스: 옵션 → 수량 → 구매 → 결제"""
-        # 옵션 선택 (텍스트 또는 번호)
+        """구매 프로세스: 옵션 → 수량 → 구매 → 결제
+
+        test_mode=True이면 구매 버튼 클릭 직전에 멈춤.
+        """
+        # 옵션 선택
         for i in range(1, 4):
             opt_val = self.options.get(f"option{i}")
             if opt_val and opt_val.strip() and opt_val.strip() != "(선택 안 함)":
-                self.browser.select_option_by_text(opt_val.strip(), i)
+                result = self.browser.select_option_by_text(opt_val.strip(), i)
+                self.log(f"  옵션{i} '{opt_val}': {'성공' if result else '실패'}")
                 _time.sleep(0.3)
 
         # 수량
-        self.browser.set_quantity(self.quantity)
+        qty_result = self.browser.set_quantity(self.quantity)
+        self.log(f"  수량 {self.quantity}: {'성공' if qty_result else '기본값'}")
+
+        # 테스트 모드: 구매 직전 멈춤
+        if self.test_mode:
+            self.log("=" * 40)
+            self.log("테스트 모드 — 구매 버튼 클릭 안 함!")
+            self.log("옵션/수량 설정까지 성공. 실제 구매는 테스트 모드를 끄세요.")
+            self.log("=" * 40)
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            except Exception:
+                pass
+            return True
 
         # 구매 버튼
         if self.browser.click_buy_button():
@@ -230,7 +250,6 @@ class PurchaseScheduler:
             self.log("=" * 40)
             self.log("구매 프로세스 완료!")
             self.log("=" * 40)
-            # 사운드 알림
             try:
                 import winsound
                 winsound.MessageBeep(winsound.MB_ICONASTERISK)

@@ -465,9 +465,20 @@ class AutoBuyerApp(ctk.CTk):
         self.pre_nav_entry.grid(row=1, column=1, sticky="w", padx=4, pady=3)
         self.pre_nav_entry.insert(0, "30")
 
-        self._label(adv_grid, "Chrome 프로필", width=90).grid(row=2, column=0, sticky="w", pady=3)
+        self.test_mode_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            adv_grid, text="테스트 모드 (구매 직전 멈춤)",
+            variable=self.test_mode_var,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+            text_color=T["warning"],
+            checkmark_color="#FFFFFF",
+            fg_color=T["warning"],
+            hover_color=T["danger"],
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=3)
+
+        self._label(adv_grid, "Chrome 프로필", width=90).grid(row=3, column=0, sticky="w", pady=3)
         self.profile_entry = self._entry(adv_grid, placeholder="비워두면 기본값", width=280)
-        self.profile_entry.grid(row=2, column=1, columnspan=3, sticky="w", padx=4, pady=3)
+        self.profile_entry.grid(row=3, column=1, columnspan=3, sticky="w", padx=4, pady=3)
 
         # ── 버튼 ──
         btn_frame = ctk.CTkFrame(main, fg_color="transparent")
@@ -991,6 +1002,7 @@ class AutoBuyerApp(ctk.CTk):
                     pre_navigate_seconds=pre_nav, retry_enabled=sched["retry_enabled"],
                     retry_preset="custom", retry_interval=sched["retry_interval"],
                     retry_max=sched["retry_max"],
+                    test_mode=self.test_mode_var.get(),
                 )
 
                 # 동기 실행 (스레드 안에서 직접 호출)
