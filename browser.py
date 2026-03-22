@@ -233,7 +233,7 @@ class BrowserManager:
                     self.driver = webdriver.Chrome(service=svc, options=options)
                 else:
                     self.driver = webdriver.Chrome(options=options)
-                self.driver.implicitly_wait(5)
+                self.driver.implicitly_wait(3)
                 self.log("Chrome 연결 성공")
                 return self.driver
             except Exception as e:
@@ -246,14 +246,18 @@ class BrowserManager:
     # ── 로그인 ──
 
     def is_logged_in(self) -> bool:
-        """네이버 로그인 상태 확인"""
+        """네이버 로그인 상태 확인 — 쿠키 기반 (페이지 이동 없이 즉시)"""
         try:
+            cookies = self.driver.get_cookies()
+            cookie_names = {c["name"] for c in cookies}
+            # NID_AUT, NID_SES 쿠키가 있으면 로그인 상태
+            if "NID_AUT" in cookie_names and "NID_SES" in cookie_names:
+                return True
+            # 쿠키 없으면 페이지로 확인 (fallback)
             self.driver.get("https://nid.naver.com/user2/help/myInfo")
-            time.sleep(1.5)
+            time.sleep(0.8)
             current_url = self.driver.current_url
-            if "nidlogin.login" in current_url or "login" in current_url.split("?")[0]:
-                return False
-            return True
+            return "nidlogin" not in current_url and "login" not in current_url.split("?")[0]
         except WebDriverException:
             return False
 
@@ -277,19 +281,17 @@ class BrowserManager:
             self.driver.get(
                 "https://nid.naver.com/nidlogin.login?mode=form&url=https%3A%2F%2Fwww.naver.com"
             )
-            time.sleep(1.5)
+            time.sleep(0.8)
 
-            # ID/PW 입력 (클립보드 붙여넣기)
             self._input_credentials(naver_id, naver_pw)
 
-            # 로그인 버튼 클릭
             login_btn = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']")
                 )
             )
             login_btn.click()
-            time.sleep(2)
+            time.sleep(1)
 
             # 로그인 결과 확인 (최대 3회 캡챠 시도)
             for attempt in range(3):
@@ -298,12 +300,10 @@ class BrowserManager:
                     self.log("네이버 로그인 성공!")
                     return True
 
-                # 캡챠 감지
                 if self._detect_captcha():
-                    self.log(f"캡챠 감지 — AI로 풀이 시도 ({attempt + 1}/3)...")
+                    self.log(f"캡챠 감지 — AI 풀이 ({attempt + 1}/3)...")
                     if self._solve_captcha():
-                        # 캡챠 풀이 후 로그인 버튼 재클릭
-                        time.sleep(1)
+                        time.sleep(0.5)
                         try:
                             btn = self.driver.find_element(
                                 By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']"
@@ -311,7 +311,7 @@ class BrowserManager:
                             btn.click()
                         except NoSuchElementException:
                             pass
-                        time.sleep(2)
+                        time.sleep(1)
                         continue
                     else:
                         self.log("캡챠 풀이 실패")
@@ -351,19 +351,17 @@ class BrowserManager:
             EC.presence_of_element_located((By.CSS_SELECTOR, "input#id, input[name='id']"))
         )
         id_el.click()
-        time.sleep(0.2)
         pyperclip.copy(naver_id)
         id_el.send_keys(Keys.CONTROL, "a")
         id_el.send_keys(Keys.CONTROL, "v")
-        time.sleep(0.3)
+        time.sleep(0.1)
 
         pw_el = self.driver.find_element(By.CSS_SELECTOR, "input#pw, input[name='pw']")
         pw_el.click()
-        time.sleep(0.2)
         pyperclip.copy(naver_pw)
         pw_el.send_keys(Keys.CONTROL, "a")
         pw_el.send_keys(Keys.CONTROL, "v")
-        time.sleep(0.3)
+        time.sleep(0.1)
 
         pyperclip.copy("")  # 클립보드 정리
 
@@ -449,13 +447,12 @@ class BrowserManager:
     def navigate(self, url: str) -> None:
         self.driver.get(url)
         self.log(f"페이지 이동: {url[:60]}...")
-        time.sleep(1)
-        # 페이지 접근 시 캡챠 감지 → 자동 풀이
+        time.sleep(0.5)
         if self._detect_captcha():
-            self.log("페이지 접근 캡챠 감지 — AI 풀이 시도...")
+            self.log("캡챠 감지 — AI 풀이...")
             for attempt in range(3):
                 if self._solve_page_captcha():
-                    time.sleep(2)
+                    time.sleep(1)
                     if not self._detect_captcha():
                         self.log("캡챠 통과!")
                         break
@@ -540,7 +537,6 @@ class BrowserManager:
                     if inp.is_displayed():
                         inp.clear()
                         inp.send_keys(answer)
-                        time.sleep(0.3)
                         break
                 except NoSuchElementException:
                     continue
