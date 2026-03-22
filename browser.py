@@ -366,11 +366,24 @@ class BrowserManager:
         pyperclip.copy("")  # 클립보드 정리
 
     def _detect_captcha(self) -> bool:
-        """캡챠 존재 여부 감지"""
+        """캡챠 존재 여부 감지 — 답 입력 필드가 실제로 있는지까지 확인"""
         try:
             page = self.driver.page_source
-            captcha_keywords = ["자동입력 방지", "captcha", "ncaptcha", "정답을 입력"]
-            return any(kw in page for kw in captcha_keywords)
+            # 키워드 체크
+            has_keyword = any(kw in page for kw in [
+                "보안 확인을 완료", "자동입력 방지", "ncaptcha", "정답을 입력",
+            ])
+            if not has_keyword:
+                return False
+            # 실제 답 입력 필드가 있는지 확인 (오탐 방지)
+            for sel in ["input[placeholder*='정답']", "input[placeholder*='입력']", "input#captcha"]:
+                try:
+                    elem = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    if elem.is_displayed():
+                        return True
+                except NoSuchElementException:
+                    continue
+            return False
         except Exception:
             return False
 
@@ -472,29 +485,25 @@ class BrowserManager:
             import re
             import anthropic
 
-            # 1. 질문 텍스트 추출
-            question_text = self._extract_captcha_question()
-            self.log(f"캡챠 질문: {question_text}")
-
-            # 2. 캡챠 이미지 캡처
-            captcha_img = self._capture_captcha_image()
+            # 전체 페이지 스크린샷 — 질문+이미지 모두 포함
+            captcha_img = self.driver.get_screenshot_as_png()
             if not captcha_img:
                 return False
 
-            # 3. Claude API 호출 — 질문 텍스트 + 이미지
             client = anthropic.Anthropic(api_key=api_key)
             img_b64 = base64.b64encode(captcha_img).decode("utf-8")
 
             prompt = (
-                f"네이버 보안 캡챠입니다.\n\n"
-                f"질문: {question_text}\n\n"
-                f"위 이미지(영수증 등)를 분석하여 질문에 대한 정답만 답해주세요.\n"
-                f"규칙:\n"
-                f"- [?] 또는 빈 칸에 들어갈 값만 출력\n"
-                f"- 숫자만 필요하면 숫자만 (하이픈, 쉼표 등 기호 절대 포함하지 마세요)\n"
-                f"- 텍스트가 필요하면 텍스트만\n"
-                f"- 다른 설명, 문장, 부연 없이 정답만 한 줄로 출력\n"
-                f"- 예시: 질문이 '새재길 [?]'이면 도로명 뒤 번지수만 출력 (예: 243)"
+                "이것은 네이버 보안 캡챠 페이지 스크린샷입니다.\n"
+                "화면에 질문과 영수증 이미지가 있습니다.\n"
+                "질문을 읽고, 영수증 이미지를 분석하여 정답만 답해주세요.\n\n"
+                "규칙:\n"
+                "- 정답만 출력 (설명, 문장 금지)\n"
+                "- 숫자가 답이면 숫자만 (하이픈, 쉼표 등 기호 절대 포함하지 마세요)\n"
+                "- [?] 또는 빈 칸에 들어갈 값만\n"
+                "- 예: '가게 전화번호의 앞에서 3번째 숫자' → 숫자 1개만\n"
+                "- 예: '새재길 [?]' → 번지수 숫자만\n"
+                "- 예: '총 몇 종류' → 숫자만"
             )
 
             message = client.messages.create(
@@ -517,11 +526,10 @@ class BrowserManager:
             )
 
             answer = message.content[0].text.strip()
-            # 후처리: 숫자만 필요한 경우 숫자 외 문자 제거
-            if question_text and ("[?]" in question_text or "빈 칸" in question_text):
-                clean = re.sub(r"[^\d]", "", answer)
-                if clean:
-                    answer = clean
+            # 숫자만 포함된 답이면 기호 제거
+            clean = re.sub(r"[^\d]", "", answer)
+            if clean and len(clean) <= 5:  # 짧은 숫자 답이면 정리
+                answer = clean
             self.log(f"캡챠 답: {answer}")
 
             # 4. 답 입력
