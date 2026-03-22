@@ -701,18 +701,10 @@ class BrowserManager:
             return False
 
     def is_product_available(self) -> bool:
-        """상품 구매 가능 여부 확인 (품절/미오픈 체크)"""
+        """상품 구매 가능 여부 — 구매 버튼 존재 여부로 판단"""
         try:
-            page_source = self.driver.page_source
-            # 품절 키워드 체크
-            soldout_keywords = ["품절", "SOLD OUT", "sold out", "매진", "구매불가"]
-            for kw in soldout_keywords:
-                if kw in page_source:
-                    return False
-
-            # 구매 버튼 존재 여부
             buy_selectors = [
-                (By.CSS_SELECTOR, "a[class*='_buyButton'], button[class*='_buyButton']"),
+                (By.CSS_SELECTOR, 'a[data-shp-area-id="buy"]'),
                 (By.XPATH, "//a[contains(text(),'구매하기')]"),
                 (By.XPATH, "//button[contains(text(),'구매하기')]"),
                 (By.XPATH, "//a[contains(text(),'바로구매')]"),
@@ -720,14 +712,29 @@ class BrowserManager:
             for by, selector in buy_selectors:
                 try:
                     elem = self.driver.find_element(by, selector)
-                    if elem.is_displayed() and elem.is_enabled():
+                    if elem.is_displayed():
                         return True
                 except NoSuchElementException:
                     continue
 
-            return False
+            # 명확한 품절 UI만 체크 (본문 텍스트가 아닌 특정 요소)
+            soldout_selectors = [
+                "//div[contains(@class,'soldout')]",
+                "//span[contains(@class,'soldout')]",
+                "//*[contains(@class,'_notAvailable')]",
+            ]
+            for xpath in soldout_selectors:
+                try:
+                    elem = self.driver.find_element(By.XPATH, xpath)
+                    if elem.is_displayed():
+                        return False
+                except NoSuchElementException:
+                    continue
+
+            # 구매 버튼도 없고 품절 표시도 없으면 → 일단 시도
+            return True
         except Exception:
-            return False
+            return True  # 에러 시에도 시도
 
     def select_option_by_text(self, option_text: str, option_group: int = 1) -> bool:
         """상품 옵션을 텍스트 또는 번호로 선택.
@@ -859,12 +866,10 @@ class BrowserManager:
                 return False
 
             buy_selectors = [
-                (By.CSS_SELECTOR, "a[class*='_buyButton'], button[class*='_buyButton']"),
-                (By.CSS_SELECTOR, "a[class*='buy'], button[class*='buy']"),
+                (By.CSS_SELECTOR, 'a[data-shp-area-id="buy"]'),
                 (By.XPATH, "//a[contains(text(),'구매하기')]"),
                 (By.XPATH, "//button[contains(text(),'구매하기')]"),
                 (By.XPATH, "//a[contains(text(),'바로구매')]"),
-                (By.XPATH, "//*[@id='content']//fieldset//div[9]/div[1]/div/a"),
             ]
             for by, selector in buy_selectors:
                 try:
