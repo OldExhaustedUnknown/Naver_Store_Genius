@@ -924,36 +924,28 @@ class BrowserManager:
         return False
 
     def process_payment(self) -> bool:
-        """결제 페이지 처리 (구매 버튼 이후 단계)"""
+        """주문/결제 페이지에서 '결제하기' 버튼 클릭"""
         try:
-            self.wait_and_click(
-                By.XPATH,
-                "//*[contains(@class, 'chargePoint') or contains(@id, 'chargePoint')]//li[4]//span",
-                timeout=5,
-            )
-            time.sleep(0.3)
+            # 주문/결제 페이지 로드 대기
+            time.sleep(2)
+            self.log("주문/결제 페이지 대기...")
 
-            self.wait_and_click(
-                By.XPATH,
-                "//*[contains(text(), '나중에 결제') or contains(text(), '무통장')]//ancestor::span | //*[contains(text(), '나중에 결제')]",
-                timeout=5,
-            )
-            time.sleep(0.3)
-
-            order_selectors = [
-                (By.XPATH, "//*[@id='orderForm']//button[contains(text(),'결제')]"),
+            # "결제하기" 버튼 찾기
+            pay_selectors = [
                 (By.XPATH, "//button[contains(text(),'결제하기')]"),
-                (By.CSS_SELECTOR, "button[class*='confirm'], button[class*='order']"),
+                (By.XPATH, "//a[contains(text(),'결제하기')]"),
+                (By.CSS_SELECTOR, "button[class*='payment'], button[class*='pay']"),
+                (By.CSS_SELECTOR, "a[class*='payment'], a[class*='pay']"),
             ]
-            for by, selector in order_selectors:
+            for by, selector in pay_selectors:
                 try:
-                    elem = self.driver.find_element(by, selector)
+                    elem = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
                     elem.click()
-                    with self._purchase_lock:
-                        self._purchase_completed = True
-                    self.log("주문 요청 전송 완료!")
+                    self.log("결제하기 버튼 클릭!")
                     return True
-                except NoSuchElementException:
+                except (NoSuchElementException, TimeoutException):
                     continue
 
             self.log("결제 버튼 미발견 — 수동 결제 필요")
