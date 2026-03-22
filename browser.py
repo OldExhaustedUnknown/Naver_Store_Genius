@@ -485,37 +485,56 @@ class BrowserManager:
             import re
             import anthropic
 
-            # 스크린샷 전 윈도우 크기 확보 (해상도 보장)
+            # 1. 질문 텍스트 추출 (body text에서)
+            question_text = ""
             try:
-                self.driver.set_window_size(1920, 1080)
-                time.sleep(0.3)
+                body_text = self.driver.find_element(By.TAG_NAME, "body").text
+                for line in body_text.split("\n"):
+                    line = line.strip()
+                    if any(kw in line for kw in ["?", "[?]", "빈 칸", "번째", "종류", "위치는", "무엇", "채워"]):
+                        question_text = line
+                        break
             except Exception:
                 pass
+            self.log(f"캡챠 질문: {question_text or '(추출 실패)'}")
 
-            captcha_img = self.driver.get_screenshot_as_png()
-            # 디버그: 스크린샷 파일로 저장
+            # 2. 캡챠 영역만 element screenshot (고해상도)
+            captcha_img = None
+            for sel in ["div[class*='captcha']", "div[class*='Captcha']", "#captcha", "form"]:
+                try:
+                    elem = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    if elem.is_displayed():
+                        captcha_img = elem.screenshot_as_png
+                        self.log(f"캡챠 영역 캡처: {sel}")
+                        break
+                except NoSuchElementException:
+                    continue
+            if not captcha_img:
+                captcha_img = self.driver.get_screenshot_as_png()
+                self.log("전체 페이지 캡처 (fallback)")
+
+            # 디버그 저장
             import tempfile
             debug_path = os.path.join(tempfile.gettempdir(), "captcha_debug.png")
             with open(debug_path, "wb") as f:
                 f.write(captcha_img)
             self.log(f"캡챠 스크린샷: {debug_path} ({len(captcha_img)} bytes)")
-            if not captcha_img:
-                return False
 
+            # 3. Claude API
             client = anthropic.Anthropic(api_key=api_key)
             img_b64 = base64.b64encode(captcha_img).decode("utf-8")
 
             prompt = (
-                "이것은 네이버 보안 캡챠 페이지 스크린샷입니다.\n"
-                "화면에 질문과 영수증 이미지가 있습니다.\n"
-                "질문을 읽고, 영수증 이미지를 분석하여 정답만 답해주세요.\n\n"
-                "규칙:\n"
-                "- 정답만 출력 (설명, 문장 금지)\n"
-                "- 숫자가 답이면 숫자만 (하이픈, 쉼표 등 기호 절대 포함하지 마세요)\n"
-                "- [?] 또는 빈 칸에 들어갈 값만\n"
-                "- 예: '가게 전화번호의 앞에서 3번째 숫자' → 숫자 1개만\n"
-                "- 예: '새재길 [?]' → 번지수 숫자만\n"
-                "- 예: '총 몇 종류' → 숫자만"
+                f"네이버 보안 캡챠입니다.\n\n"
+                f"질문: {question_text}\n\n"
+                f"위 이미지(영수증 등)를 분석하여 질문에 대한 정답만 답해주세요.\n"
+                f"규칙:\n"
+                f"- 정답만 출력 (설명, 문장 금지)\n"
+                f"- 숫자가 답이면 숫자만 (하이픈, 쉼표, 공백 등 기호 절대 금지)\n"
+                f"- [?] 또는 빈 칸에 들어갈 값만\n"
+                f"- 예: '전화번호의 앞에서 3번째 숫자' → 숫자 1개만\n"
+                f"- 예: '새재길 [?]' → 번지수 숫자만\n"
+                f"- 예: '총 몇 종류' → 숫자만"
             )
 
             message = client.messages.create(
