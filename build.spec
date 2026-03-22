@@ -37,6 +37,7 @@ a = Analysis(
         'anthropic',
         'anthropic._client',
         'pyperclip',
+        'pytesseract',
     ],
     hookspath=[],
     hooksconfig={},
