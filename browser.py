@@ -983,24 +983,14 @@ class BrowserManager:
     def _handle_pay_keypad(self) -> bool:
         """네이버페이 가상 키패드에서 비밀번호 자동 입력
 
-        키패드 숫자 위치가 매번 랜덤 → 스크린샷으로 위치 파악 → 순서대로 클릭
+        숫자 버튼을 텍스트로 찾아서 클릭 (좌표 기반보다 정확)
         """
         pay_pw = load_pay_password()
         if not pay_pw:
             self.log("네이버페이 비밀번호가 저장되지 않았습니다.")
             return False
 
-        api_key = load_api_key()
-        if not api_key:
-            self.log("Claude API 키가 없어 키패드를 풀 수 없습니다.")
-            return False
-
         try:
-            import base64
-            import json as _json
-            import anthropic
-
-            # 비밀번호 팝업 대기 (새 창 또는 iframe)
             time.sleep(1)
 
             # 팝업 창으로 전환
@@ -1017,69 +1007,53 @@ class BrowserManager:
                 self.log("비밀번호 팝업 창 전환")
                 time.sleep(0.5)
 
-            # 키패드 스크린샷
-            keypad_img = self.driver.get_screenshot_as_png()
-            img_b64 = base64.b64encode(keypad_img).decode("utf-8")
-
-            # Claude에 키패드 숫자 좌표 요청
-            client = anthropic.Anthropic(api_key=api_key)
-            message = client.messages.create(
-                model="claude-opus-4-20250514",
-                max_tokens=300,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": img_b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "이 이미지는 네이버페이 비밀번호 가상 키패드입니다.\n"
-                                "각 숫자(0~9)의 화면상 중심 좌표(x, y)를 JSON으로 알려주세요.\n"
-                                "이미지의 왼쪽 상단이 (0,0)이고 픽셀 단위입니다.\n"
-                                "형식: {\"0\": [x, y], \"1\": [x, y], ...}\n"
-                                "JSON만 출력하세요. 다른 텍스트 없이."
-                            ),
-                        },
-                    ],
-                }],
-            )
-
-            response_text = message.content[0].text.strip()
-            # JSON 추출 (코드블록 안에 있을 수 있음)
-            if "```" in response_text:
-                response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
-                response_text = response_text.strip()
-
-            keypad_map = _json.loads(response_text)
-            self.log(f"키패드 좌표 {len(keypad_map)}개 인식")
-
-            # 비밀번호 한 자리씩 클릭
-            from selenium.webdriver.common.action_chains import ActionChains
-
+            # 비밀번호 한 자리씩 — 숫자 텍스트를 가진 버튼/a/span 찾아서 클릭
             for digit in pay_pw:
-                if digit not in keypad_map:
-                    self.log(f"키패드에서 '{digit}' 좌표를 찾을 수 없음")
+                clicked = False
+
+                # XPath로 정확한 텍스트 매칭
+                digit_xpaths = [
+                    f"//a[normalize-space(text())='{digit}']",
+                    f"//button[normalize-space(text())='{digit}']",
+                    f"//div[normalize-space(text())='{digit}']",
+                    f"//span[normalize-space(text())='{digit}']",
+                    f"//td[normalize-space(text())='{digit}']",
+                ]
+                for xpath in digit_xpaths:
+                    try:
+                        elems = self.driver.find_elements(By.XPATH, xpath)
+                        for elem in elems:
+                            if elem.is_displayed() and elem.size["width"] > 20:
+                                elem.click()
+                                clicked = True
+                                self.log(f"키패드 '{digit}' 클릭")
+                                break
+                    except Exception:
+                        continue
+                    if clicked:
+                        break
+
+                if not clicked:
+                    self.log(f"키패드에서 '{digit}'을 찾을 수 없음")
                     return False
 
-                x, y = keypad_map[digit]
-                # 절대 좌표로 클릭 (JavaScript)
-                self.driver.execute_script(
-                    "document.elementFromPoint(arguments[0], arguments[1]).click();",
-                    int(x), int(y)
-                )
-                time.sleep(0.2)
-                self.log(f"키패드 '{digit}' 클릭 ({x}, {y})")
+                time.sleep(0.15)
 
             time.sleep(1)
+
+            # "확인" 팝업이 뜨면 실패한 것 — 재시도 없이 리턴
+            try:
+                err_msg = self.driver.find_element(By.XPATH, "//*[contains(text(),'입력 실패')]")
+                if err_msg.is_displayed():
+                    self.log("비밀번호 입력 실패")
+                    # 확인 버튼 클릭
+                    try:
+                        self.driver.find_element(By.XPATH, "//button[contains(text(),'확인')]").click()
+                    except Exception:
+                        pass
+                    return False
+            except NoSuchElementException:
+                pass  # 성공
 
             # 원래 창으로 복귀
             if keypad_window:
@@ -1092,7 +1066,6 @@ class BrowserManager:
 
         except Exception as e:
             self.log(f"키패드 입력 오류: {e}")
-            # 원래 창으로 복귀 시도
             try:
                 self.driver.switch_to.window(self.driver.window_handles[0])
             except Exception:
