@@ -249,30 +249,38 @@ class BrowserManager:
             self.driver.get(
                 "https://nid.naver.com/nidlogin.login?mode=form&url=https%3A%2F%2Fwww.naver.com"
             )
-            time.sleep(1)
+            time.sleep(1.5)
 
-            # JavaScript로 ID/PW 입력
-            script = """
-            (function() {
-                var id_el = document.querySelector('#id');
-                var pw_el = document.querySelector('#pw');
-                if (id_el) {
-                    id_el.focus();
-                    id_el.value = arguments[0];
-                    id_el.dispatchEvent(new Event('input', {bubbles: true}));
-                }
-                if (pw_el) {
-                    pw_el.focus();
-                    pw_el.value = arguments[1];
-                    pw_el.dispatchEvent(new Event('input', {bubbles: true}));
-                }
-            })();
-            """
-            self.driver.execute_script(script, naver_id, naver_pw)
-            time.sleep(0.5)
+            # 클립보드 붙여넣기 방식 — 캡챠 회피에 효과적
+            import pyperclip
+            from selenium.webdriver.common.keys import Keys
 
+            # 아이디 입력
+            id_el = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input#id, input[name='id']"))
+            )
+            id_el.click()
+            time.sleep(0.2)
+            pyperclip.copy(naver_id)
+            id_el.send_keys(Keys.CONTROL, "a")
+            id_el.send_keys(Keys.CONTROL, "v")
+            time.sleep(0.3)
+
+            # 비밀번호 입력
+            pw_el = self.driver.find_element(By.CSS_SELECTOR, "input#pw, input[name='pw']")
+            pw_el.click()
+            time.sleep(0.2)
+            pyperclip.copy(naver_pw)
+            pw_el.send_keys(Keys.CONTROL, "a")
+            pw_el.send_keys(Keys.CONTROL, "v")
+            time.sleep(0.3)
+
+            # 클립보드 정리 (보안)
+            pyperclip.copy("")
+
+            # 로그인 버튼 클릭
             login_btn = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, ".btn_login, #log\\.login"))
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']"))
             )
             login_btn.click()
             time.sleep(2)
