@@ -62,6 +62,11 @@ def save_api_key(api_key: str) -> None:
 
 
 def load_api_key() -> Optional[str]:
+    # 1. 환경변수 우선
+    env_key = os.environ.get("ANTHROPIC_API_KEY")
+    if env_key:
+        return env_key
+    # 2. keyring fallback
     return keyring.get_password(KEYRING_SERVICE, "anthropic_api_key")
 
 
