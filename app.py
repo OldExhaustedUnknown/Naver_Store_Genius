@@ -1026,9 +1026,15 @@ class AutoBuyerApp(ctk.CTk):
         def _run_sequential():
             pre_nav = int(self.pre_nav_entry.get().strip() or "30")
             profile = self.profile_entry.get().strip()
+            # 이전 스케줄러 정리 (Chrome 프로세스 누수 방지)
+            if hasattr(self, "_active_scheduler") and self._active_scheduler:
+                try:
+                    self._active_scheduler.browser.quit()
+                except Exception:
+                    pass
             scheduler = PurchaseScheduler(log_callback=self._log)
             scheduler.on_countdown = self._update_countdown
-            self._active_scheduler = scheduler  # 중지 시 접근 가능하도록 저장
+            self._active_scheduler = scheduler
 
             # 기존 Chrome 세션 재사용
             if self.scheduler.browser.driver is not None:
@@ -1178,6 +1184,10 @@ class AutoBuyerApp(ctk.CTk):
         def _append():
             self.log_box.configure(state="normal")
             self.log_box.insert("end", line)
+            # 로그 500줄 제한 (메모리 누수 방지)
+            line_count = int(self.log_box.index("end-1c").split(".")[0])
+            if line_count > 500:
+                self.log_box.delete("1.0", f"{line_count - 500}.0")
             self.log_box.see("end")
             self.log_box.configure(state="disabled")
 

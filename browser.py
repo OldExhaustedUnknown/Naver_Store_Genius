@@ -252,6 +252,13 @@ class BrowserManager:
                 self.log("Chrome 연결 성공")
                 return self.driver
             except Exception as e:
+                # 실패한 driver 정리 (chromedriver 프로세스 누수 방지)
+                if self.driver:
+                    try:
+                        self.driver.quit()
+                    except Exception:
+                        pass
+                    self.driver = None
                 last_error = e
                 self.log(f"연결 실패 {attempt}/3: {type(e).__name__}: {str(e)[:80]}")
                 time.sleep(2)
