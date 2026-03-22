@@ -629,7 +629,7 @@ class BrowserManager:
         """현재 스마트스토어 페이지에서 옵션 추출.
 
         DOM 구조:
-        - 드롭다운: a[role="button"][aria-haspopup="listbox"]
+        - 드롭다운: a[role="button"][aria-haspopup="listbox"][data-shp-area="pcs.optselect"]
         - 옵션 리스트: ul[role="listbox"]
         - 각 항목: a[role="option"][data-shp-contents-id="일반"]
         """
@@ -640,7 +640,7 @@ class BrowserManager:
 
             # 드롭다운 버튼 찾기: aria-haspopup="listbox"
             dropdowns = self.driver.find_elements(
-                By.CSS_SELECTOR, 'a[role="button"][aria-haspopup="listbox"]'
+                By.CSS_SELECTOR, 'a[role="button"][aria-haspopup="listbox"][data-shp-area="pcs.optselect"]'
             )
 
             if not dropdowns:
@@ -737,14 +737,14 @@ class BrowserManager:
         """상품 옵션을 텍스트 또는 번호로 선택.
 
         스마트스토어 DOM:
-        - 드롭다운: a[role="button"][aria-haspopup="listbox"]
+        - 드롭다운: a[role="button"][aria-haspopup="listbox"][data-shp-area="pcs.optselect"]
         - 항목: ul[role="listbox"] a[role="option"]
         """
         is_index = option_text.isdigit()
 
         # 드롭다운 찾기
         dropdowns = self.driver.find_elements(
-            By.CSS_SELECTOR, 'a[role="button"][aria-haspopup="listbox"]'
+            By.CSS_SELECTOR, 'a[role="button"][aria-haspopup="listbox"][data-shp-area="pcs.optselect"]'
         )
         if len(dropdowns) < option_group:
             self.log(f"옵션 드롭다운 {option_group}번째를 찾을 수 없습니다.")
