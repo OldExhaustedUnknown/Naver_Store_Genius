@@ -298,8 +298,7 @@ class AutoBuyerApp(ctk.CTk):
         self.url_combo.pack(side="left", fill="x", expand=True, padx=(4, 4))
         self.url_combo.set("")
 
-        self._btn_secondary(url_row, "미리보기", self._preview_product, width=70).pack(side="left", padx=(0, 2))
-        self._btn_primary(url_row, "옵션 가져오기", self._fetch_options, width=95).pack(side="left")
+        self._btn_primary(url_row, "미리보기 + 옵션", self._preview_and_fetch, width=120).pack(side="left")
 
         # 날짜
         date_row = ctk.CTkFrame(prod_card, fg_color="transparent")
@@ -472,13 +471,12 @@ class AutoBuyerApp(ctk.CTk):
         btn_frame = ctk.CTkFrame(main, fg_color="transparent")
         btn_frame.pack(fill="x", padx=16, pady=10)
 
-        self._btn_primary(btn_frame, "스케줄 추가", self._add_schedule, width=120).pack(side="left", padx=(0, 4))
+        self._btn_primary(btn_frame, "즉시 시작", self._quick_start, width=95).pack(side="left", padx=(0, 4))
+        self._btn_secondary(btn_frame, "스케줄 추가", self._add_schedule, width=95).pack(side="left", padx=4)
         self.start_all_btn = self._btn_primary(btn_frame, "전체 시작", self._start_all)
         self.start_all_btn.pack(side="left", expand=True, fill="x", padx=4)
-        self.stop_all_btn = self._btn_danger(btn_frame, "전체 중지", self._stop_all, state="disabled")
-        self.stop_all_btn.pack(side="left", expand=True, fill="x", padx=4)
-        self.save_btn = self._btn_secondary(btn_frame, "설정 저장", self._save_config)
-        self.save_btn.pack(side="left", expand=True, fill="x", padx=(4, 0))
+        self.stop_all_btn = self._btn_danger(btn_frame, "중지", self._stop_all, state="disabled")
+        self.stop_all_btn.pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         # ── 스케줄 리스트 카드 ──
         sched_card = self._card(main)
@@ -632,6 +630,76 @@ class AutoBuyerApp(ctk.CTk):
         self.api_key_entry.delete(0, "end")
         self.api_status.configure(text="삭제됨", text_color=T["warning"])
         self._log("API 키가 삭제되었습니다.")
+
+    def _preview_and_fetch(self):
+        """미리보기 + 옵션 가져오기 통합"""
+        url = self.url_combo.get().strip()
+        if not url:
+            self._log("상품 URL을 입력하세요.")
+            return
+
+        self._log(f"상품 열기 + 옵션 추출: {url[:50]}...")
+        profile = self.profile_entry.get().strip()
+
+        def _work():
+            browser = self.scheduler.browser
+            try:
+                if browser.driver is not None:
+                    try:
+                        browser.driver.title
+                    except Exception:
+                        browser.driver = None
+
+                if browser.driver is None:
+                    browser.launch_chrome(profile)
+                    browser.connect()
+
+                browser.navigate(url)
+                browser.restore_window()
+                time.sleep(1)
+
+                # 옵션 추출
+                options = browser.extract_product_options()
+
+                def _update():
+                    for i, combo in enumerate(self.option_combos):
+                        combo.configure(values=[])
+                        combo.set("")
+                        self.option_labels[i].configure(text=f"옵션 {i+1}")
+                    for i, opt in enumerate(options[:3]):
+                        self.option_labels[i].configure(text=opt["name"])
+                        self.option_combos[i].configure(values=opt["values"])
+                        if opt["values"]:
+                            self.option_combos[i].set(opt["values"][0])
+                    if options:
+                        self._log(f"옵션 {len(options)}개: " +
+                                  ", ".join(f'{o["name"]}({len(o["values"])}개)' for o in options))
+                    else:
+                        self._log("옵션 없는 상품이거나 품절")
+
+                self.after(0, _update)
+            except Exception as e:
+                self._log(f"미리보기 오류: {e}")
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _quick_start(self):
+        """폼 데이터로 스케줄 추가 없이 즉시 실행"""
+        data = self._collect_form_data()
+        if not data:
+            return
+        if not messagebox.askyesno(
+            "즉시 구매",
+            f"URL: {data['url'][:50]}...\n"
+            f"시간: {data['purchase_dt'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"수량: {data['quantity']}개\n\n실제 주문이 이루어집니다.",
+            icon="warning",
+        ):
+            return
+        # 스케줄에 추가 후 바로 시작
+        self.schedules = [data]
+        self._render_schedules()
+        self._start_all()
 
     def _open_calendar(self):
         """달력 팝업 열기"""
@@ -993,6 +1061,11 @@ class AutoBuyerApp(ctk.CTk):
                 return
             for s in running:
                 s["scheduler"].stop()
+        # 자동 저장 (R10)
+        try:
+            self._save_config()
+        except Exception:
+            pass
         # Chrome/chromedriver 정리
         try:
             self.scheduler.browser.quit()
