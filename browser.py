@@ -92,69 +92,59 @@ class BrowserManager:
         raise FileNotFoundError("Chrome 실행 파일을 찾을 수 없습니다.")
 
     def launch_chrome(self, profile_path: str = "") -> None:
-        """디버거 포트가 열린 Chrome 인스턴스 실행
+        """전용 프로필로 독립된 Chrome 인스턴스 실행.
 
-        Chrome은 같은 user-data-dir로 2개 실행 불가 → 기존 인스턴스 감지 후 처리
+        일반 Chrome과 완전히 공존 — user-data-dir이 다르면 별개 프로세스.
+        같은 전용 프로필의 이전 인스턴스가 있으면 lock 파일만 정리.
         """
         chrome_path = self._find_chrome()
         user_data = profile_path or CHROME_TEMP_DIR
         self._debugger_port = _find_free_port()
 
-        def _start_chrome() -> subprocess.Popen:
-            cmd = [
-                chrome_path,
-                f"--remote-debugging-port={self._debugger_port}",
-                f"--user-data-dir={user_data}",
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ]
-            return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        def _wait_port(max_seconds: float = 10) -> bool:
-            for _ in range(int(max_seconds * 2)):
-                time.sleep(0.5)
+        # 이전 세션의 lock 파일 정리 (비정상 종료 대응)
+        for name in ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"]:
+            lf = os.path.join(user_data, name)
+            if os.path.exists(lf):
                 try:
-                    with socket.create_connection(("127.0.0.1", self._debugger_port), timeout=1):
-                        return True
-                except (ConnectionRefusedError, OSError):
-                    continue
-            return False
+                    os.remove(lf)
+                except OSError:
+                    pass
 
-        # 1차 시도
-        self._chrome_process = _start_chrome()
+        cmd = [
+            chrome_path,
+            f"--remote-debugging-port={self._debugger_port}",
+            f"--user-data-dir={user_data}",
+            "--disable-blink-features=AutomationControlled",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        self._chrome_process = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         self.log(f"Chrome 실행 (port={self._debugger_port})")
 
-        # Chrome이 즉시 종료되는지 확인 (기존 인스턴스에 위임한 경우)
+        # Chrome이 즉시 종료되면 이전 전용 인스턴스가 이미 실행 중
         time.sleep(1.5)
         if self._chrome_process.poll() is not None:
-            self.log("기존 Chrome이 실행 중 — 종료 후 재시작합니다...")
-            # taskkill로 모든 Chrome 종료 (전용 프로필이므로 안전)
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "chrome.exe"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            # 이전 전용 Chrome의 debugger 포트를 찾아서 재사용하는 건 어렵기 때문에
+            # 사용자에게 안내
+            self.log("이전에 열린 전용 Chrome 창을 닫고 다시 시도해주세요.")
+            raise RuntimeError(
+                "전용 Chrome이 이미 실행 중입니다. "
+                "이전에 열린 'Naver Store Genius' Chrome 창을 닫고 다시 시도하세요."
             )
-            time.sleep(2)
 
-            # lock 파일 정리
-            for name in ["lockfile", "SingletonLock"]:
-                lf = os.path.join(user_data, name)
-                if os.path.exists(lf):
-                    try:
-                        os.remove(lf)
-                    except OSError:
-                        pass
+        # 포트 대기 (최대 10초)
+        for i in range(20):
+            time.sleep(0.5)
+            try:
+                with socket.create_connection(("127.0.0.1", self._debugger_port), timeout=1):
+                    self.log("Chrome 준비 완료")
+                    return
+            except (ConnectionRefusedError, OSError):
+                continue
 
-            # 새 포트로 재시도
-            self._debugger_port = _find_free_port()
-            self._chrome_process = _start_chrome()
-            self.log(f"Chrome 재시작 (port={self._debugger_port})")
-
-        # 포트 대기
-        if _wait_port(10):
-            self.log("Chrome 준비 완료")
-        else:
-            self.log("경고: Chrome 포트 대기 타임아웃")
+        self.log("경고: Chrome 포트 대기 타임아웃 — 연결을 시도합니다")
 
     def _resolve_chromedriver(self) -> str:
         """chromedriver 경로를 미리 확보 (Selenium Manager 지연 방지)"""
