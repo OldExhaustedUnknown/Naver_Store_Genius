@@ -216,7 +216,7 @@ class PurchaseScheduler:
         # 옵션 선택 (텍스트 또는 번호)
         for i in range(1, 4):
             opt_val = self.options.get(f"option{i}")
-            if opt_val and opt_val.strip():
+            if opt_val and opt_val.strip() and opt_val.strip() != "(선택 안 함)":
                 self.browser.select_option_by_text(opt_val.strip(), i)
                 _time.sleep(0.3)
 

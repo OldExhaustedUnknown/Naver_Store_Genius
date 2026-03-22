@@ -671,9 +671,8 @@ class AutoBuyerApp(ctk.CTk):
                         self.option_labels[i].configure(text=f"옵션 {i+1}")
                     for i, opt in enumerate(options[:3]):
                         self.option_labels[i].configure(text=opt["name"])
-                        self.option_combos[i].configure(values=opt["values"])
-                        if opt["values"]:
-                            self.option_combos[i].set(opt["values"][0])
+                        self.option_combos[i].configure(values=["(선택 안 함)"] + opt["values"])
+                        self.option_combos[i].set("(선택 안 함)")
                     if options:
                         self._log(f"옵션 {len(options)}개: " +
                                   ", ".join(f'{o["name"]}({len(o["values"])}개)' for o in options))
@@ -784,9 +783,8 @@ class AutoBuyerApp(ctk.CTk):
 
                     for i, opt in enumerate(options[:3]):
                         self.option_labels[i].configure(text=opt["name"])
-                        self.option_combos[i].configure(values=opt["values"])
-                        if opt["values"]:
-                            self.option_combos[i].set(opt["values"][0])
+                        self.option_combos[i].configure(values=["(선택 안 함)"] + opt["values"])
+                        self.option_combos[i].set("(선택 안 함)")
 
                     if options:
                         self._log(f"옵션 {len(options)}개 추출: " +
