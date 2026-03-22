@@ -338,7 +338,22 @@ class BrowserManager:
                     else:
                         self.log("캡챠 풀이 실패")
                 else:
-                    # 캡챠 없이 로그인 실패 — 추가 인증 또는 수동 대기
+                    # 캡챠 없음 — 로그인 버튼 한 번 더 클릭 시도
+                    self.log("로그인 버튼 재클릭 시도...")
+                    try:
+                        btn = self.driver.find_element(
+                            By.CSS_SELECTOR, ".btn_login, #log\\.login, button[type='submit']"
+                        )
+                        btn.click()
+                        time.sleep(1.5)
+                        url = self.driver.current_url
+                        if "nidlogin" not in url and "login" not in url.split("?")[0]:
+                            self.log("로그인 성공! (재클릭)")
+                            return True
+                    except Exception:
+                        pass
+
+                    # 그래도 안 되면 수동 대기
                     self.log("브라우저에서 직접 로그인을 완료해주세요 (120초 대기)")
                     for _ in range(120):
                         time.sleep(1)
