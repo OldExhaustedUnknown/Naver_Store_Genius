@@ -485,8 +485,13 @@ class BrowserManager:
             import re
             import anthropic
 
-            # 전체 페이지 스크린샷 — 질문+이미지 모두 포함
             captcha_img = self.driver.get_screenshot_as_png()
+            # 디버그: 스크린샷 파일로 저장
+            import tempfile
+            debug_path = os.path.join(tempfile.gettempdir(), "captcha_debug.png")
+            with open(debug_path, "wb") as f:
+                f.write(captcha_img)
+            self.log(f"캡챠 스크린샷 저장: {debug_path} ({len(captcha_img)} bytes)")
             if not captcha_img:
                 return False
 
@@ -507,7 +512,7 @@ class BrowserManager:
             )
 
             message = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-opus-4-20250514",
                 max_tokens=50,
                 messages=[{
                     "role": "user",
