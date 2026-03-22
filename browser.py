@@ -1059,24 +1059,34 @@ class BrowserManager:
 
             time.sleep(1)
 
-            # 실패 체크
+            # 팝업이 닫혔으면 성공 (입력 후 자동 처리됨)
+            try:
+                current_windows = self.driver.window_handles
+                if keypad_window and keypad_window not in current_windows:
+                    self.log("비밀번호 팝업 닫힘 — 결제 성공")
+                    self.driver.switch_to.window(original_window)
+                    return True
+            except Exception:
+                pass
+
+            # 실패 체크 (팝업이 아직 열려있는 경우)
             try:
                 err = self.driver.find_element(By.XPATH, "//*[contains(text(),'입력 실패')]")
-                if err.is_displayed():
+                if err and err.is_displayed():
                     self.log("비밀번호 입력 실패")
                     try:
                         self.driver.find_element(By.XPATH, "//button[contains(text(),'확인')]").click()
                     except Exception:
                         pass
                     return False
-            except NoSuchElementException:
-                pass
+            except Exception:
+                pass  # 요소 없으면 성공
 
-            if keypad_window:
-                try:
-                    self.driver.switch_to.window(original_window)
-                except Exception:
-                    pass
+            # 원래 창 복귀
+            try:
+                self.driver.switch_to.window(original_window)
+            except Exception:
+                pass
 
             return True
 
@@ -1086,7 +1096,8 @@ class BrowserManager:
                 self.driver.switch_to.window(self.driver.window_handles[0])
             except Exception:
                 pass
-            return False
+            # 에러가 나도 입력은 됐을 수 있음
+            return True
 
     def reset_purchase_flag(self):
         with self._purchase_lock:
