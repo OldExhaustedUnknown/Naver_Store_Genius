@@ -645,12 +645,34 @@ class AutoBuyerApp(ctk.CTk):
         self.api_status.configure(text="삭제됨", text_color=T["warning"])
         self._log("API 키가 삭제되었습니다.")
 
+    def _save_url_to_history(self, url: str):
+        """URL을 히스토리에 추가하고 즉시 config 파일에 저장"""
+        if not url:
+            return
+        if url not in self.url_history:
+            self.url_history.insert(0, url)
+            self.url_history = self.url_history[:10]
+            self.url_combo.configure(values=self.url_history)
+        # 즉시 파일에 저장
+        try:
+            config_data = {}
+            if CONFIG_PATH.exists():
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            config_data["product_url"] = url
+            config_data["url_history"] = self.url_history
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, ensure_ascii=False, indent=4)
+        except Exception:
+            pass
+
     def _preview_and_fetch(self):
         """미리보기 + 옵션 가져오기 통합"""
         url = self.url_combo.get().strip()
         if not url:
             self._log("상품 URL을 입력하세요.")
             return
+        self._save_url_to_history(url)
 
         self._log(f"상품 열기 + 옵션 추출: {url[:50]}...")
         profile = self.profile_entry.get().strip()
@@ -908,12 +930,7 @@ class AutoBuyerApp(ctk.CTk):
         self._render_schedules()
         dt_str = data["purchase_dt"].strftime("%H:%M:%S")
         self._log(f"스케줄 추가: {data['url'][:40]}... @ {dt_str} x{data['quantity']}")
-        # URL 히스토리
-        url = data["url"]
-        if url not in self.url_history:
-            self.url_history.insert(0, url)
-            self.url_history = self.url_history[:10]
-            self.url_combo.configure(values=self.url_history)
+        self._save_url_to_history(data["url"])
 
     def _render_schedules(self):
         """스케줄 리스트 렌더링"""
