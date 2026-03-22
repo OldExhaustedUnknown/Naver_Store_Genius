@@ -981,9 +981,10 @@ class BrowserManager:
             return False
 
     def _handle_pay_keypad(self) -> bool:
-        """네이버페이 가상 키패드에서 비밀번호 자동 입력
+        """네이버페이 가상 키패드 비밀번호 입력
 
-        숫자 버튼을 텍스트로 찾아서 클릭 (좌표 기반보다 정확)
+        매 자릿수마다: 스크린샷 → Tesseract OCR로 숫자 위치 파악 → 클릭
+        API 호출 없이 로컬에서 즉시 처리
         """
         pay_pw = load_pay_password()
         if not pay_pw:
@@ -991,6 +992,20 @@ class BrowserManager:
             return False
 
         try:
+            from PIL import Image
+            import pytesseract
+            import io
+
+            # Tesseract 경로 설정
+            for tess_path in [
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Tesseract-OCR", "tesseract.exe"),
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            ]:
+                if os.path.exists(tess_path):
+                    pytesseract.pytesseract.tesseract_cmd = tess_path
+                    break
+
             time.sleep(1)
 
             # 팝업 창으로 전환
@@ -1004,58 +1019,59 @@ class BrowserManager:
 
             if keypad_window:
                 self.driver.switch_to.window(keypad_window)
-                self.log("비밀번호 팝업 창 전환")
+                self.log("비밀번호 팝업 전환")
                 time.sleep(0.5)
 
-            # 비밀번호 한 자리씩 — 숫자 텍스트를 가진 버튼/a/span 찾아서 클릭
-            for digit in pay_pw:
-                clicked = False
+            dpr = self.driver.execute_script("return window.devicePixelRatio || 1;")
 
-                # XPath로 정확한 텍스트 매칭
-                digit_xpaths = [
-                    f"//a[normalize-space(text())='{digit}']",
-                    f"//button[normalize-space(text())='{digit}']",
-                    f"//div[normalize-space(text())='{digit}']",
-                    f"//span[normalize-space(text())='{digit}']",
-                    f"//td[normalize-space(text())='{digit}']",
-                ]
-                for xpath in digit_xpaths:
-                    try:
-                        elems = self.driver.find_elements(By.XPATH, xpath)
-                        for elem in elems:
-                            if elem.is_displayed() and elem.size["width"] > 20:
-                                elem.click()
-                                clicked = True
-                                self.log(f"키패드 '{digit}' 클릭")
-                                break
-                    except Exception:
-                        continue
-                    if clicked:
+            for i, digit in enumerate(pay_pw):
+                time.sleep(0.2)
+
+                # 스크린샷 → OCR로 숫자별 좌표 추출
+                screenshot = self.driver.get_screenshot_as_png()
+                img = Image.open(io.BytesIO(screenshot))
+
+                # OCR: 각 문자의 bounding box
+                ocr_data = pytesseract.image_to_data(
+                    img, config="--psm 6 digits", output_type=pytesseract.Output.DICT
+                )
+
+                # 대상 숫자의 중심 좌표 찾기
+                found = False
+                for j, text in enumerate(ocr_data["text"]):
+                    if text.strip() == digit and ocr_data["conf"][j] > 30:
+                        x = ocr_data["left"][j] + ocr_data["width"][j] // 2
+                        y = ocr_data["top"][j] + ocr_data["height"][j] // 2
+                        css_x = x / dpr
+                        css_y = y / dpr
+
+                        self.driver.execute_script(
+                            "document.elementFromPoint(arguments[0], arguments[1]).click();",
+                            css_x, css_y
+                        )
+                        self.log(f"키패드 '{digit}' ({i+1}/{len(pay_pw)})")
+                        found = True
                         break
 
-                if not clicked:
-                    self.log(f"키패드에서 '{digit}'을 찾을 수 없음")
+                if not found:
+                    self.log(f"키패드에서 '{digit}' OCR 인식 실패")
                     return False
-
-                time.sleep(0.15)
 
             time.sleep(1)
 
-            # "확인" 팝업이 뜨면 실패한 것 — 재시도 없이 리턴
+            # 실패 체크
             try:
-                err_msg = self.driver.find_element(By.XPATH, "//*[contains(text(),'입력 실패')]")
-                if err_msg.is_displayed():
+                err = self.driver.find_element(By.XPATH, "//*[contains(text(),'입력 실패')]")
+                if err.is_displayed():
                     self.log("비밀번호 입력 실패")
-                    # 확인 버튼 클릭
                     try:
                         self.driver.find_element(By.XPATH, "//button[contains(text(),'확인')]").click()
                     except Exception:
                         pass
                     return False
             except NoSuchElementException:
-                pass  # 성공
+                pass
 
-            # 원래 창으로 복귀
             if keypad_window:
                 try:
                     self.driver.switch_to.window(original_window)
