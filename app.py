@@ -312,7 +312,7 @@ class AutoBuyerApp(ctk.CTk):
 
         self._section_title(opt_card, "옵션 선택")
         ctk.CTkLabel(
-            opt_card, text="해당 없으면 비워두세요. 선택할 옵션의 순번을 입력합니다.",
+            opt_card, text="옵션명 또는 순번을 입력하세요. (예: 순한맛, L, 2)",
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             text_color=T["text_hint"],
         ).pack(anchor="w", padx=18, pady=(0, 4))
@@ -323,7 +323,7 @@ class AutoBuyerApp(ctk.CTk):
         self.option_entries = []
         for i in range(3):
             self._label(opts_row, f"옵션 {i+1}", width=55).grid(row=0, column=i*2, padx=(0, 2))
-            e = self._entry(opts_row, placeholder="번호", width=55)
+            e = self._entry(opts_row, placeholder="옵션명", width=75)
             e.grid(row=0, column=i*2+1, padx=(0, 12))
             self.option_entries.append(e)
 
@@ -718,6 +718,11 @@ class AutoBuyerApp(ctk.CTk):
             if not messagebox.askyesno("종료 확인", "스케줄러가 실행 중입니다. 정말 종료하시겠습니까?"):
                 return
             self.scheduler.stop()
+        # Chrome/chromedriver 프로세스 정리 (임시 폴더 잠금 방지)
+        try:
+            self.scheduler.browser.quit()
+        except Exception:
+            pass
         self.destroy()
 
     # ══════════════════════════════════════════════

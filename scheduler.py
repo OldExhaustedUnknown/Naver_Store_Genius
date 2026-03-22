@@ -221,12 +221,12 @@ class PurchaseScheduler:
 
     def _do_purchase(self) -> bool:
         """실제 구매 프로세스: 옵션 → 수량 → 구매 → 결제"""
-        # 옵션 선택
+        # 옵션 선택 (텍스트 또는 번호)
         for i in range(1, 4):
             opt_val = self.options.get(f"option{i}")
-            if opt_val and str(opt_val).isdigit() and int(opt_val) > 0:
-                self.browser.select_option(int(opt_val), i)
-                _time.sleep(0.2)
+            if opt_val and opt_val.strip():
+                self.browser.select_option_by_text(opt_val.strip(), i)
+                _time.sleep(0.3)
 
         # 수량
         self.browser.set_quantity(self.quantity)

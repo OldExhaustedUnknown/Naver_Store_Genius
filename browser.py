@@ -554,41 +554,131 @@ class BrowserManager:
         except Exception:
             return False
 
-    def select_option(self, option_index: int, option_group: int) -> bool:
-        """상품 옵션 선택"""
-        # 레거시 XPath
-        try:
-            self.driver.find_element(
-                By.XPATH,
-                f"//*[@id='content']//fieldset//div[5]/div[{option_group}]/a"
-            ).click()
-            time.sleep(0.3)
-            self.driver.find_element(
-                By.XPATH,
-                f"//*[@id='content']//fieldset//div[5]/div[{option_group}]/ul/li[{option_index}]"
-            ).click()
-            self.log(f"옵션 {option_group}-{option_index} 선택")
-            return True
-        except NoSuchElementException:
-            pass
+    def select_option_by_text(self, option_text: str, option_group: int = 1) -> bool:
+        """상품 옵션을 텍스트로 선택.
 
-        # CSS (최신)
+        option_text: 선택할 옵션 텍스트 (예: "순한맛", "L", "블랙")
+                     숫자만 입력하면 N번째 옵션 선택 (하위 호환)
+        option_group: 몇 번째 드롭다운인지 (1부터)
+        """
+        # 숫자만 입력된 경우 → N번째 옵션 선택
+        is_index = option_text.isdigit()
+
+        # 드롭다운 찾기 — 여러 셀렉터 시도
+        dropdown_selectors = [
+            "div[class*='_selectOption'] > div, div[class*='select_box']",
+            "a[role='button'][class*='select']",
+            "div[class*='_optionSelect']",
+            "div[class*='option'] > button, div[class*='option'] > a",
+            # 스크린샷에서 본 "소금간 선택" 같은 드롭다운
+            "div[class*='select'] button, div[class*='select'] a",
+        ]
+
+        dropdown = None
+        for selector in dropdown_selectors:
+            try:
+                elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if len(elems) >= option_group:
+                    dropdown = elems[option_group - 1]
+                    break
+            except Exception:
+                continue
+
+        if not dropdown:
+            # XPath로 재시도 — 텍스트로 드롭다운 찾기
+            try:
+                dropdowns = self.driver.find_elements(
+                    By.XPATH,
+                    "//div[contains(@class,'select')]//button | //div[contains(@class,'select')]//a[@role='button']"
+                )
+                if len(dropdowns) >= option_group:
+                    dropdown = dropdowns[option_group - 1]
+            except Exception:
+                pass
+
+        if not dropdown:
+            self.log(f"옵션 드롭다운 {option_group}번째를 찾을 수 없습니다.")
+            return False
+
+        # 드롭다운 클릭하여 옵션 목록 열기
         try:
-            dropdowns = self.driver.find_elements(
-                By.CSS_SELECTOR,
-                "a[role='button'][class*='select'], div[class*='_optionSelect']"
-            )
-            if len(dropdowns) >= option_group:
-                dropdowns[option_group - 1].click()
-                time.sleep(0.3)
-                options = self.driver.find_elements(By.CSS_SELECTOR, "li[class*='option']")
-                if len(options) >= option_index:
-                    options[option_index - 1].click()
-                    self.log(f"옵션 {option_group}-{option_index} 선택 (CSS)")
-                    return True
+            dropdown.click()
+            time.sleep(0.5)
         except Exception as e:
-            self.log(f"옵션 선택 실패: {e}")
-        return False
+            self.log(f"드롭다운 클릭 실패: {e}")
+            return False
+
+        # 옵션 항목 찾기
+        item_selectors = [
+            "li[class*='option']",
+            "ul[class*='option'] li",
+            "div[class*='option_list'] li",
+            "ul[role='listbox'] li",
+            "div[class*='select'] ul li",
+        ]
+
+        items = []
+        for selector in item_selectors:
+            try:
+                items = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if items:
+                    break
+            except Exception:
+                continue
+
+        if not items:
+            # XPath 재시도
+            try:
+                items = self.driver.find_elements(
+                    By.XPATH, "//ul[contains(@class,'opt')]//li | //ul[@role='listbox']//li"
+                )
+            except Exception:
+                pass
+
+        if not items:
+            self.log("옵션 항목을 찾을 수 없습니다.")
+            return False
+
+        # 옵션 선택
+        if is_index:
+            idx = int(option_text)
+            if 1 <= idx <= len(items):
+                try:
+                    items[idx - 1].click()
+                    self.log(f"옵션 {option_group}번 드롭다운에서 {idx}번째 항목 선택")
+                    return True
+                except Exception as e:
+                    self.log(f"옵션 클릭 실패: {e}")
+                    return False
+            else:
+                self.log(f"옵션 인덱스 {idx}가 범위 밖 (총 {len(items)}개)")
+                return False
+        else:
+            # 텍스트 매칭
+            for item in items:
+                try:
+                    item_text = item.text.strip()
+                    if option_text in item_text or item_text in option_text:
+                        item.click()
+                        self.log(f"옵션 선택: '{item_text}'")
+                        return True
+                except Exception:
+                    continue
+
+            # 부분 매칭 재시도
+            for item in items:
+                try:
+                    item_text = item.text.strip().lower()
+                    if option_text.lower() in item_text:
+                        item.click()
+                        self.log(f"옵션 선택 (부분매칭): '{item.text.strip()}'")
+                        return True
+                except Exception:
+                    continue
+
+            available = [it.text.strip() for it in items[:10] if it.text.strip()]
+            self.log(f"'{option_text}' 옵션을 찾을 수 없음. 가능한 옵션: {available}")
+            return False
 
     def set_quantity(self, quantity: int) -> bool:
         """수량 설정"""
