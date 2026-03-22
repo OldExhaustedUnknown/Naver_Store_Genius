@@ -625,6 +625,86 @@ class BrowserManager:
         except Exception:
             return "(질문 추출 실패)"
 
+    def extract_product_options(self) -> list[dict]:
+        """현재 페이지에서 상품 옵션 목록을 추출.
+
+        Returns: [{"name": "소금간 선택", "values": ["순한맛", "보통맛", ...]}]
+        """
+        results = []
+        try:
+            time.sleep(1)
+
+            # 드롭다운 그룹 찾기 — 여러 셀렉터 시도
+            group_selectors = [
+                "div[class*='option_area'] > div",
+                "div[class*='_optionArea'] > div",
+                "div[class*='select_box']",
+                "div[class*='_selectOption']",
+                "div[class*='option_group']",
+            ]
+
+            groups = []
+            for sel in group_selectors:
+                groups = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                if groups:
+                    break
+
+            if not groups:
+                # 단일 드롭다운 페이지
+                groups = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "div[class*='select'] > button, div[class*='select'] > a[role='button']"
+                )
+
+            for idx, group in enumerate(groups):
+                option_info = {"name": f"옵션 {idx + 1}", "values": []}
+                try:
+                    # 드롭다운 제목 추출
+                    title_el = group.find_element(By.CSS_SELECTOR, "label, span, button")
+                    title = title_el.text.strip()
+                    if title:
+                        option_info["name"] = title
+
+                    # 드롭다운 클릭하여 옵션 목록 열기
+                    clickable = group.find_elements(By.CSS_SELECTOR, "button, a[role='button'], a")
+                    if clickable:
+                        clickable[0].click()
+                        time.sleep(0.5)
+
+                        # 옵션 항목 추출
+                        items = self.driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "li[class*='option'], ul[role='listbox'] li, ul[class*='opt'] li, div[class*='option_list'] li"
+                        )
+                        for item in items:
+                            text = item.text.strip()
+                            if text and text != option_info["name"]:
+                                option_info["values"].append(text)
+
+                        # 드롭다운 닫기 (Escape)
+                        from selenium.webdriver.common.keys import Keys
+                        try:
+                            self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                        except Exception:
+                            pass
+                        time.sleep(0.3)
+
+                except Exception:
+                    pass
+
+                if option_info["values"]:
+                    results.append(option_info)
+
+            if results:
+                self.log(f"옵션 {len(results)}개 그룹 추출 완료")
+            else:
+                self.log("추출 가능한 옵션이 없습니다 (옵션 없는 상품이거나 품절)")
+
+        except Exception as e:
+            self.log(f"옵션 추출 오류: {e}")
+
+        return results
+
     def wait_and_click(self, by: str, value: str, timeout: int = 10) -> bool:
         try:
             elem = WebDriverWait(self.driver, timeout).until(

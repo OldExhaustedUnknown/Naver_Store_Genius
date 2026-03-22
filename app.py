@@ -6,6 +6,7 @@ CustomTkinter / 네이버 스마트스토어 공식 디자인 시스템 적용
 
 import json
 import os
+import time
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -280,12 +281,25 @@ class AutoBuyerApp(ctk.CTk):
 
         self._section_title(prod_card, "상품 정보")
 
+        # URL + 히스토리 드롭다운
         url_row = ctk.CTkFrame(prod_card, fg_color="transparent")
         url_row.pack(fill="x", padx=18, pady=3)
         self._label(url_row, "상품 URL").pack(side="left")
-        self.url_entry = self._entry(url_row, placeholder="https://smartstore.naver.com/...")
-        self.url_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
-        self._btn_secondary(url_row, "미리보기", self._preview_product, width=80).pack(side="left")
+
+        self.url_history: list[str] = []
+        self.url_combo = ctk.CTkComboBox(
+            url_row, values=[], width=340,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+            fg_color=T["bg_white"], border_color=T["border_input"],
+            text_color=T["text_primary"], button_color=T["border_default"],
+            dropdown_fg_color=T["bg_white"], dropdown_text_color=T["text_primary"],
+            corner_radius=8,
+        )
+        self.url_combo.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self.url_combo.set("")
+
+        self._btn_secondary(url_row, "미리보기", self._preview_product, width=70).pack(side="left", padx=(0, 2))
+        self._btn_primary(url_row, "옵션 가져오기", self._fetch_options, width=95).pack(side="left")
 
         # 날짜
         date_row = ctk.CTkFrame(prod_card, fg_color="transparent")
@@ -296,13 +310,25 @@ class AutoBuyerApp(ctk.CTk):
         self.date_entry.pack(side="left", padx=(4, 4))
         self._btn_secondary(date_row, "달력", self._open_calendar, width=50).pack(side="left")
 
-        # 시간
+        # 시간 + 프리셋
         time_row = ctk.CTkFrame(prod_card, fg_color="transparent")
         time_row.pack(fill="x", padx=18, pady=3)
         self._label(time_row, "구매 시간").pack(side="left")
 
         self.time_spinbox = TimeSpinbox(time_row, font_family=FONT_FAMILY)
-        self.time_spinbox.pack(side="left", padx=(4, 0))
+        self.time_spinbox.pack(side="left", padx=(4, 8))
+
+        # 시간 프리셋 버튼
+        presets_frame = ctk.CTkFrame(time_row, fg_color="transparent")
+        presets_frame.pack(side="left")
+        for h in [10, 11, 12, 14, 20]:
+            ctk.CTkButton(
+                presets_frame, text=f"{h}시", width=38, height=26,
+                fg_color=T["bg_section"], hover_color=T["border_default"],
+                text_color=T["text_secondary"], corner_radius=6,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                command=lambda hh=h: self.time_spinbox.set_values(hh, 0, 0),
+            ).pack(side="left", padx=1)
 
         qty_row = ctk.CTkFrame(prod_card, fg_color="transparent")
         qty_row.pack(fill="x", padx=18, pady=(3, 12))
@@ -315,22 +341,46 @@ class AutoBuyerApp(ctk.CTk):
         opt_card = self._card(main)
         opt_card.pack(fill="x", padx=16, pady=6)
 
-        self._section_title(opt_card, "옵션 선택")
+        opt_header = ctk.CTkFrame(opt_card, fg_color="transparent")
+        opt_header.pack(fill="x", padx=18, pady=(14, 2))
         ctk.CTkLabel(
-            opt_card, text="옵션명 또는 순번을 입력하세요. (예: 순한맛, L, 2)",
+            opt_header, text="옵션 선택",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"),
+            text_color=T["text_dark"],
+        ).pack(side="left")
+        ctk.CTkLabel(
+            opt_header, text="  '옵션 가져오기'로 자동 추출하거나 직접 입력",
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             text_color=T["text_hint"],
-        ).pack(anchor="w", padx=18, pady=(0, 4))
+        ).pack(side="left")
 
-        opts_row = ctk.CTkFrame(opt_card, fg_color="transparent")
-        opts_row.pack(fill="x", padx=18, pady=(0, 12))
+        self.options_container = ctk.CTkFrame(opt_card, fg_color="transparent")
+        self.options_container.pack(fill="x", padx=18, pady=(4, 12))
 
-        self.option_entries = []
+        # 기본 3개 옵션 (ComboBox — 드롭다운 + 직접 입력)
+        self.option_combos: list[ctk.CTkComboBox] = []
+        self.option_labels: list[ctk.CTkLabel] = []
         for i in range(3):
-            self._label(opts_row, f"옵션 {i+1}", width=55).grid(row=0, column=i*2, padx=(0, 2))
-            e = self._entry(opts_row, placeholder="옵션명", width=75)
-            e.grid(row=0, column=i*2+1, padx=(0, 12))
-            self.option_entries.append(e)
+            row = ctk.CTkFrame(self.options_container, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            lbl = ctk.CTkLabel(
+                row, text=f"옵션 {i+1}", width=80, anchor="w",
+                font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+                text_color=T["text_secondary"],
+            )
+            lbl.pack(side="left")
+            combo = ctk.CTkComboBox(
+                row, values=[], width=250,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+                fg_color=T["bg_white"], border_color=T["border_input"],
+                text_color=T["text_primary"], button_color=T["border_default"],
+                dropdown_fg_color=T["bg_white"], dropdown_text_color=T["text_primary"],
+                corner_radius=8,
+            )
+            combo.pack(side="left", padx=(4, 0))
+            combo.set("")
+            self.option_combos.append(combo)
+            self.option_labels.append(lbl)
 
         # ── 재시도 설정 카드 ──
         retry_card = self._card(main)
@@ -574,7 +624,7 @@ class AutoBuyerApp(ctk.CTk):
 
     def _preview_product(self):
         """상품 URL을 Chrome에서 미리 열어 옵션/상태 확인"""
-        url = self.url_entry.get().strip()
+        url = self.url_combo.get().strip()
         if not url:
             self._log("상품 URL을 입력하세요.")
             return
@@ -601,6 +651,61 @@ class AutoBuyerApp(ctk.CTk):
                 self._log(f"미리보기 오류: {e}")
 
         threading.Thread(target=_open, daemon=True).start()
+
+    def _fetch_options(self):
+        """상품 페이지에서 옵션을 자동 추출하여 드롭다운에 반영"""
+        url = self.url_combo.get().strip()
+        if not url:
+            self._log("상품 URL을 입력하세요.")
+            return
+
+        self._log(f"옵션 추출 중: {url[:50]}...")
+        profile = self.profile_entry.get().strip()
+
+        def _extract():
+            browser = self.scheduler.browser
+            try:
+                if browser.driver is not None:
+                    try:
+                        browser.driver.title
+                    except Exception:
+                        browser.driver = None
+
+                if browser.driver is None:
+                    browser.launch_chrome(profile)
+                    browser.connect()
+
+                browser.navigate(url)
+                time.sleep(1)
+
+                options = browser.extract_product_options()
+
+                # GUI 업데이트 (메인 스레드에서)
+                def _update_ui():
+                    for i, combo in enumerate(self.option_combos):
+                        combo.configure(values=[])
+                        combo.set("")
+                        self.option_labels[i].configure(text=f"옵션 {i+1}")
+
+                    for i, opt in enumerate(options[:3]):
+                        self.option_labels[i].configure(text=opt["name"])
+                        self.option_combos[i].configure(values=opt["values"])
+                        if opt["values"]:
+                            self.option_combos[i].set(opt["values"][0])
+
+                    if options:
+                        self._log(f"옵션 {len(options)}개 추출: " +
+                                  ", ".join(f'{o["name"]}({len(o["values"])}개)' for o in options))
+                    else:
+                        self._log("추출 가능한 옵션이 없습니다.")
+
+                self.after(0, _update_ui)
+                browser.minimize_window()
+
+            except Exception as e:
+                self._log(f"옵션 추출 오류: {e}")
+
+        threading.Thread(target=_extract, daemon=True).start()
 
     def _load_saved_credentials(self):
         nid, _ = load_credentials()
@@ -631,7 +736,7 @@ class AutoBuyerApp(ctk.CTk):
     # ══════════════════════════════════════════════
 
     def _on_start(self):
-        url = self.url_entry.get().strip()
+        url = self.url_combo.get().strip()
         if not url:
             self._log("상품 URL을 입력하세요.")
             return
@@ -665,7 +770,7 @@ class AutoBuyerApp(ctk.CTk):
 
         options = {}
         opt_desc = []
-        for i, entry in enumerate(self.option_entries, 1):
+        for i, entry in enumerate(self.option_combos, 1):
             val = entry.get().strip()
             options[f"option{i}"] = val if val else None
             if val:
@@ -821,15 +926,23 @@ class AutoBuyerApp(ctk.CTk):
     # ══════════════════════════════════════════════
 
     def _save_config(self):
+        # URL 히스토리 업데이트
+        url = self.url_combo.get().strip()
+        if url and url not in self.url_history:
+            self.url_history.insert(0, url)
+            self.url_history = self.url_history[:10]  # 최대 10개
+            self.url_combo.configure(values=self.url_history)
+
         config = {
-            "product_url": self.url_entry.get().strip(),
+            "product_url": url,
+            "url_history": self.url_history,
             "purchase_date": self.date_entry.get().strip(),
             "purchase_hour": str(self.time_spinbox.get_values()[0]),
             "purchase_min": str(self.time_spinbox.get_values()[1]),
             "purchase_sec": str(self.time_spinbox.get_values()[2]),
-            "option1": self.option_entries[0].get().strip(),
-            "option2": self.option_entries[1].get().strip(),
-            "option3": self.option_entries[2].get().strip(),
+            "option1": self.option_combos[0].get().strip(),
+            "option2": self.option_combos[1].get().strip(),
+            "option3": self.option_combos[2].get().strip(),
             "quantity": self.qty_entry.get().strip(),
             "use_ntp_sync": self.ntp_var.get(),
             "pre_navigate_seconds": self.pre_nav_entry.get().strip(),
@@ -857,7 +970,13 @@ class AutoBuyerApp(ctk.CTk):
                 entry.delete(0, "end")
                 entry.insert(0, str(val))
 
-        _set(self.url_entry, "product_url")
+        url_val = config.get("product_url", "")
+        if url_val:
+            self.url_combo.set(url_val)
+        # URL 히스토리 로드
+        self.url_history = config.get("url_history", [])
+        if self.url_history:
+            self.url_combo.configure(values=self.url_history)
         _set(self.date_entry, "purchase_date")
         # 시간 스핀박스 로드
         try:
@@ -867,9 +986,10 @@ class AutoBuyerApp(ctk.CTk):
             self.time_spinbox.set_values(h, m, s)
         except (ValueError, TypeError):
             pass
-        _set(self.option_entries[0], "option1")
-        _set(self.option_entries[1], "option2")
-        _set(self.option_entries[2], "option3")
+        for i, key in enumerate(["option1", "option2", "option3"]):
+            val = config.get(key, "")
+            if val:
+                self.option_combos[i].set(val)
         _set(self.qty_entry, "quantity")
         _set(self.pre_nav_entry, "pre_navigate_seconds")
         _set(self.profile_entry, "chrome_profile_path")
