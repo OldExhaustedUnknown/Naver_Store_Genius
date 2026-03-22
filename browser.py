@@ -942,12 +942,7 @@ class BrowserManager:
         return False
 
     def process_payment(self) -> bool:
-        """결제 페이지 처리"""
-        with self._purchase_lock:
-            if self._purchase_completed:
-                self.log("이중 구매 방지: 이미 결제 완료")
-                return False
-
+        """결제 페이지 처리 (구매 버튼 이후 단계)"""
         try:
             self.wait_and_click(
                 By.XPATH,

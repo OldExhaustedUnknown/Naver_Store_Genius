@@ -970,6 +970,7 @@ class AutoBuyerApp(ctk.CTk):
             profile = self.profile_entry.get().strip()
             scheduler = PurchaseScheduler(log_callback=self._log)
             scheduler.on_countdown = self._update_countdown
+            self._active_scheduler = scheduler  # 중지 시 접근 가능하도록 저장
 
             # 기존 Chrome 세션 재사용
             if self.scheduler.browser.driver is not None:
@@ -1032,10 +1033,9 @@ class AutoBuyerApp(ctk.CTk):
     def _stop_all(self):
         if hasattr(self, "_stop_all_event"):
             self._stop_all_event.set()
-        # 현재 실행 중인 스케줄러도 중지
-        for s in self.schedules:
-            if s.get("scheduler") and s["scheduler"].is_running:
-                s["scheduler"].stop()
+        # 현재 실행 중인 순차 스케줄러 중지
+        if hasattr(self, "_active_scheduler") and self._active_scheduler:
+            self._active_scheduler.stop()
         self.start_all_btn.configure(state="normal")
         self.stop_all_btn.configure(state="disabled")
         self.status_label.configure(text="중지됨", fg_color=T["danger"])
