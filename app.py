@@ -1120,17 +1120,25 @@ class AutoBuyerApp(ctk.CTk):
         self.after(0, _update)
 
     def _on_close(self):
+        # 자동 저장 — 종료 흐름과 무관하게 *최우선* 실행
+        # 사용자가 입력한 URL/옵션이 손실되지 않도록 다른 어떤 작업보다 먼저 저장
+        try:
+            self._save_config()
+        except Exception as e:
+            try:
+                self._write_file_log(
+                    datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                    f"[CRITICAL] _save_config 실패: {e!r}",
+                )
+            except Exception:
+                pass
+
         running = [s for s in self.schedules if s.get("scheduler") and s["scheduler"].is_running]
         if running:
             if not messagebox.askyesno("종료 확인", f"{len(running)}개 스케줄이 실행 중입니다. 정말 종료하시겠습니까?"):
-                return
+                return  # 종료 취소 — 이미 저장됐으므로 안전
             for s in running:
                 s["scheduler"].stop()
-        # 자동 저장 (R10)
-        try:
-            self._save_config()
-        except Exception:
-            pass
         # Chrome/chromedriver 정리
         try:
             self.scheduler.browser.quit()
@@ -1181,6 +1189,9 @@ class AutoBuyerApp(ctk.CTk):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         line = f"[{timestamp}] {message}\n"
 
+        # 파일 로그 (사후 분석용, 앱 디렉토리에 저장)
+        self._write_file_log(timestamp, message)
+
         def _append():
             self.log_box.configure(state="normal")
             self.log_box.insert("end", line)
@@ -1196,39 +1207,70 @@ class AutoBuyerApp(ctk.CTk):
         except RuntimeError:
             print(line, end="")  # m8 수정: fallback to stdout
 
+    def _write_file_log(self, timestamp: str, message: str):
+        """파일 로그 — purchase_log_YYYYMMDD.txt (앱 디렉토리)"""
+        try:
+            log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            date_str = datetime.now().strftime("%Y%m%d")
+            log_path = os.path.join(log_dir, f"purchase_log_{date_str}.txt")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except Exception:
+            pass  # 로그 실패로 구매 방해 금지
+
     # ══════════════════════════════════════════════
     #  설정 저장/로드
     # ══════════════════════════════════════════════
 
     def _save_config(self):
-        # URL 히스토리 업데이트
-        url = self.url_combo.get().strip()
+        # URL 히스토리 업데이트 — URL 저장은 어떤 일이 있어도 성공해야 함
+        try:
+            url = self.url_combo.get().strip()
+        except Exception:
+            url = ""
         if url and url not in self.url_history:
             self.url_history.insert(0, url)
             self.url_history = self.url_history[:10]  # 최대 10개
-            self.url_combo.configure(values=self.url_history)
+            try:
+                self.url_combo.configure(values=self.url_history)
+            except Exception:
+                pass
+
+        # 각 필드를 개별 try로 보호 — 한 필드 실패가 전체 저장을 막지 않도록
+        def _safe(fn, default=""):
+            try:
+                return fn()
+            except Exception:
+                return default
 
         config = {
             "product_url": url,
             "url_history": self.url_history,
-            "purchase_date": self.date_entry.get().strip(),
-            "purchase_hour": str(self.time_spinbox.get_values()[0]),
-            "purchase_min": str(self.time_spinbox.get_values()[1]),
-            "purchase_sec": str(self.time_spinbox.get_values()[2]),
-            "option1": self.option_combos[0].get().strip(),
-            "option2": self.option_combos[1].get().strip(),
-            "option3": self.option_combos[2].get().strip(),
-            "quantity": self.qty_entry.get().strip(),
-            "use_ntp_sync": self.ntp_var.get(),
-            "pre_navigate_seconds": self.pre_nav_entry.get().strip(),
-            "chrome_profile_path": self.profile_entry.get().strip(),
-            "retry_enabled": self.retry_var.get(),
-            "retry_interval": self.retry_interval_entry.get().strip(),
-            "retry_max": self.retry_max_entry.get().strip(),
+            "purchase_date": _safe(lambda: self.date_entry.get().strip()),
+            "purchase_hour": _safe(lambda: str(self.time_spinbox.get_values()[0])),
+            "purchase_min": _safe(lambda: str(self.time_spinbox.get_values()[1])),
+            "purchase_sec": _safe(lambda: str(self.time_spinbox.get_values()[2])),
+            "option1": _safe(lambda: self.option_combos[0].get().strip()),
+            "option2": _safe(lambda: self.option_combos[1].get().strip()),
+            "option3": _safe(lambda: self.option_combos[2].get().strip()),
+            "quantity": _safe(lambda: self.qty_entry.get().strip(), "1"),
+            "use_ntp_sync": _safe(lambda: self.ntp_var.get(), True),
+            "pre_navigate_seconds": _safe(lambda: self.pre_nav_entry.get().strip(), "30"),
+            "chrome_profile_path": _safe(lambda: self.profile_entry.get().strip()),
+            "retry_enabled": _safe(lambda: self.retry_var.get(), True),
+            "retry_interval": _safe(lambda: self.retry_interval_entry.get().strip(), "1.0"),
+            "retry_max": _safe(lambda: self.retry_max_entry.get().strip(), "60"),
         }
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        # 원자적 쓰기 — 도중 크래시로 빈 파일 남는 것 방지
+        tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=4)
-        self._log("설정 저장 완료")
+        os.replace(tmp_path, CONFIG_PATH)
+        try:
+            self._log("설정 저장 완료")
+        except Exception:
+            pass
 
     def _load_config(self):
         if not CONFIG_PATH.exists():
@@ -1274,8 +1316,80 @@ class AutoBuyerApp(ctk.CTk):
         self.retry_var.set(config.get("retry_enabled", True))
 
 
+def _acquire_single_instance_lock():
+    """단일 인스턴스 가드 — localhost 포트 bind.
+
+    이미 실행 중이면 None 반환. socket은 프로세스 종료 시 자동 해제되므로
+    lockfile과 달리 dead process 잔재 문제가 없음.
+    """
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # 127.0.0.1만 bind (외부 접근 차단). 포트는 앱 고정값.
+        sock.bind(("127.0.0.1", 56473))
+        sock.listen(1)
+        return sock
+    except OSError:
+        sock.close()
+        return None
+
+
 def main():
+    # 단일 인스턴스 가드
+    lock_sock = _acquire_single_instance_lock()
+    if lock_sock is None:
+        try:
+            from tkinter import messagebox
+            import tkinter as tk
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showwarning(
+                "Naver Store Genius",
+                "이미 실행 중입니다.\n\n작업 표시줄/시스템 트레이에서 기존 창을 확인하세요.",
+            )
+            root.destroy()
+        except Exception:
+            pass
+        return
+
     app = AutoBuyerApp()
+
+    # 비정상 종료 시 Chrome 정리 — _on_close가 호출되지 않는 경로 대비
+    import atexit
+    def _cleanup():
+        try:
+            if app.scheduler and app.scheduler.browser:
+                app.scheduler.browser.quit()
+        except Exception:
+            pass
+        for s in getattr(app, "schedules", []):
+            if s.get("scheduler") and s["scheduler"].browser:
+                try:
+                    s["scheduler"].browser.quit()
+                except Exception:
+                    pass
+        try:
+            lock_sock.close()
+        except Exception:
+            pass
+    atexit.register(_cleanup)
+
+    # SIGTERM/SIGBREAK (Windows: Ctrl+Break, taskkill) 시에도 정리 트리거
+    import signal
+    def _signal_handler(signum, frame):
+        try:
+            app._on_close()
+        except Exception:
+            pass
+        # atexit이 처리하도록 자연 종료
+    for sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _signal_handler)
+            except (ValueError, OSError):
+                pass  # GUI 스레드/Windows 제약 무시
+
     app.mainloop()
 
 
